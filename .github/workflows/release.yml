@@ -59,4 +59,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
-        run: gh release create "${{ github.ref_name }}" artifacts/release/* --generate-notes --verify-tag
+        run: |
+          $releaseArgs = @('release', 'create', '${{ github.ref_name }}')
+          $releaseArgs += @(Get-ChildItem artifacts/release -File | ForEach-Object FullName)
+          $releaseArgs += @('--generate-notes', '--verify-tag')
+          if ('${{ github.ref_name }}'.Contains('-')) {
+            $releaseArgs += '--prerelease'
+          }
+          gh @releaseArgs
