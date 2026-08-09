@@ -84,7 +84,21 @@ The reachability wording is intentional. `STATIC ALLOW` and `STATIC BLOCK` summa
 
 ## Install
 
-### Release binary
+### Signed installer
+
+For finalized signed releases, the recommended route is to download, checksum, inspect, and run the release's `install.ps1`. It uses PowerShell 5.1+, installs without administrator rights to `%LOCALAPPDATA%\Programs\PortCVE`, verifies the versioned ZIP and the signed executable, and updates the user `PATH` with rollback protection. See the complete [installer instructions and trust checks](docs/install.md).
+
+Quick latest-release command:
+
+```powershell
+irm https://github.com/Labeeb2339/PortCVE/releases/latest/download/install.ps1 | iex
+```
+
+> Security warning: piping `irm` to `iex` executes remote text without giving you a chance to inspect or independently checksum the installer. Prefer the documented `curl.exe` download-then-verify flow. The checked-in `scripts/install.ps1` is an unfinalized template and deliberately refuses to run; use the installer asset from a signed release.
+
+The installer never permits an unsigned production install. The historical `v0.1.0-alpha.1` release is unsigned and is intentionally rejected.
+
+### Manual release binary
 
 Download the Windows x64 ZIP from the repository's Releases page, verify its SHA-256 file, extract `portcve.exe`, and place it somewhere on your `PATH`.
 
