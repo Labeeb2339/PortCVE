@@ -11,6 +11,7 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeFrameworkVersion>10.0.10</RuntimeFrameworkVersion>
     <PublishTrimmed>false</PublishTrimmed>
     <Version>0.1.0-alpha.1</Version>
     <Title>BindWitness</Title>
