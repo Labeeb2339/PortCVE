@@ -1,27 +1,45 @@
 # CLI reference
 
-BindWitness is read-only. Commands observe local Windows state, write JSON or a lockfile when requested, and never kill a process, close a socket, edit firewall policy, or probe a remote host.
+PortCVE is read-only. Commands observe local Windows state, write JSON or a lockfile when requested, and never kill a process, close a socket, edit firewall policy, or probe a remote host.
 
 ## Commands
 
 ```text
-bindwitness                              List all collected TCP listeners and UDP binds
-bindwitness <port>                       Inspect TCP and UDP binds on a port
-bindwitness <tcp|udp>:<port>             Inspect one protocol on a port
-bindwitness list                         List and filter current endpoints
-bindwitness snapshot [--output <path>]   Emit a versioned snapshot
-bindwitness lock [--output <path>]       Write a normalized baseline
-bindwitness diff <lockfile>              Show current drift from a baseline
-bindwitness check <lockfile>             Gate security-relevant drift
-bindwitness watch                        Poll and report endpoint changes
-bindwitness doctor                       Report collector coverage
-bindwitness help                         Show the concise built-in reference
-bindwitness version                      Print the tool version
+portcve                              List all collected TCP listeners and UDP binds
+portcve <port>                       Inspect TCP and UDP binds on a port
+portcve <tcp|udp>:<port>             Inspect one protocol on a port
+portcve list                         List and filter current endpoints
+portcve snapshot [--output <path>]   Emit a versioned snapshot
+portcve lock [--output <path>]       Write a normalized baseline
+portcve diff <lockfile>              Show current drift from a baseline
+portcve check <lockfile>             Gate security-relevant drift
+portcve scan <tcp:port>              Check exact subjects for one TCP listener
+portcve scan --all                   Check exact Docker image IDs for all TCP listeners
+portcve watch                        Poll and report endpoint changes
+portcve doctor                       Report collector coverage
+portcve help                         Show the concise built-in reference
+portcve version                      Print the tool version
 ```
 
 Direct inspection and `doctor` collect Windows Firewall evidence unless `--no-firewall` is supplied. `list`, `snapshot`, `lock`, and `watch` skip that slower collector unless `--firewall` is supplied.
 
-Every live collection also performs a bounded probe of the local Docker Engine named pipe (`\\.\pipe\docker_engine`). When Docker is running, BindWitness reads running-container published ports and correlates them to observed Windows endpoints by protocol, host address, and host port. The result is medium-confidence runtime correlation, not direct guest-process ownership. An absent pipe is recorded as `docker: unavailable` and returns quickly without starting Docker Desktop, pulling an image, or starting a container. There is no Docker enablement flag.
+Every live collection also performs a bounded probe of the local Docker Engine named pipe (`\\.\pipe\docker_engine`). When Docker is running, PortCVE reads running-container published ports and correlates them to observed Windows endpoints by protocol, host address, and host port. The result is medium-confidence runtime correlation, not direct guest-process ownership. An absent pipe is recorded as `docker: unavailable` and returns quickly without starting Docker Desktop, pulling an image, or starting a container. There is no Docker enablement flag.
+
+## Offline vulnerability scans
+
+`scan` maps selected TCP listeners only to immutable Docker `sha256:` image IDs. Native Windows process names and paths are not guessed into products or CPEs. For one exact TCP port, `--sbom <path>` adds an explicitly declared local SBOM subject; it cannot be combined with `--all`.
+
+The scanner launches a separately installed Trivy executable without a shell, selects the local Docker daemon only, and supplies update, telemetry, version-check, VEX-update, and online dependency-resolution disable flags. It never downloads Trivy or a database. Set `PORTCVE_TRIVY_PATH` for a trusted local non-default executable and `PORTCVE_TRIVY_CACHE_DIR` for a non-default cache. The executable path (or the caller's `PATH` lookup when unset) is an explicit trust boundary and must not resolve through UNC storage or a reparse point. The cache, its database directory, metadata, and database file must resolve on an allowed local drive without reparse traversal before Trivy starts. The expected database metadata is `<cache>\db\metadata.json`; a missing or invalid database makes the subject unavailable, while a database older than 72 hours makes evidence partial.
+
+| Option | Behavior |
+| --- | --- |
+| `--all` | Select every observed TCP listener and deduplicate exact Docker subjects by immutable image ID. |
+| `--sbom <path>` | Add one explicit SBOM subject to an exact-port scan. UNC paths, mapped network drives, and paths traversing reparse points are rejected before collection. The file is hashed before and after scanning; changed input findings are discarded and cannot produce a successful scan. |
+| `--fail-on high` | Exit `1` for a high or critical known-advisory match. |
+| `--fail-on critical` | Exit `1` for a critical known-advisory match. |
+| `--strict` | Exit `3` if any selected subject is unsupported, unavailable, failed, or partial. |
+
+Human output and vulnerability JSON say `known_advisory_match`: they do not claim the package is reachable or exploitable. JSON uses `schema/portcve.vulnerability.v1.schema.json` and is redacted unless `--include-private` is supplied. If Trivy cannot run or no subject produces scan evidence, `scan` exits `3`; a selector with no matching TCP listener exits `1`.
 
 ## Filters and collection
 
@@ -81,7 +99,7 @@ Watch is TCP-only unless `--include-udp` or a UDP protocol filter is supplied. I
 | `0` | Success, matching inspection, or passing check. An empty unfiltered list is still successful. |
 | `1` | No matching inspected endpoint or a failed security drift check. |
 | `2` | Invalid usage, schema, lockfile, or non-overwrite request. |
-| `3` | Evidence is incomplete for the requested strict or gating operation. |
+| `3` | Evidence is incomplete for the requested strict or gating operation, or no vulnerability subject could be scanned. |
 | `4` | Required collection or runtime operation failed. |
 | `130` | Interrupted. |
 

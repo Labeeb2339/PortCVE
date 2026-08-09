@@ -4,10 +4,13 @@ Every JSON document and lockfile starts with `schema_version`.
 
 Published schema documents use location-independent URNs:
 
-- `urn:bindwitness:schema:snapshot:v1`
-- `urn:bindwitness:schema:lock:v1`
+- `urn:portcve:schema:snapshot:v1`
+- `urn:portcve:schema:lock:v1`
+- `urn:portcve:schema:vulnerability:v1`
 
-These identifiers do not imply that a `bindwitness.dev` website or schema host exists.
+These identifiers do not imply that a `portcve.dev` website or schema host exists.
+
+The `v0.1.0-alpha.1` release used `bindwitness.*.v1.schema.json` filenames, `urn:bindwitness:schema:*:v1` identifiers, and a `bindwitness/<version>` `created_by` value. The pre-1.0 PortCVE rename changes those brand identifiers without changing the JSON instance shape or `schema_version: 1`. Existing alpha lockfiles remain readable because compatibility is determined from `schema_version` and the document fields; consumers that pinned an old schema filename or `$id` must update that reference.
 
 Before `1.0`, incompatible schema changes require a schema-version increment and a changelog entry. Readers reject unknown lockfile schema versions instead of guessing.
 

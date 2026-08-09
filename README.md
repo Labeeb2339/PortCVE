@@ -1,28 +1,29 @@
-# BindWitness
+# PortCVE
 
-**Explain local ports. Lock the ones you expect.**
+**Explain local ports. Check what backs them. Lock what you expect.**
 
-BindWitness is a read-only Windows CLI that connects the facts other port tools leave separate:
+PortCVE is a read-only Windows CLI that connects the facts other port tools leave separate:
 
 - which TCP listeners and UDP endpoints exist;
 - which process or Windows service owns each bind;
 - which local Docker Engine publication maps a container port to that observed host bind;
+- which known vulnerability advisories match packages in an exactly identified local Docker image or explicitly supplied SBOM;
 - whether the bind is loopback-only, interface-specific, or wildcard;
 - which active interfaces and network profiles it covers;
 - what a static evaluation of the merged Windows Firewall policy suggests; and
 - whether that local attack surface changed since a trusted baseline.
 
-BindWitness does not call a wildcard bind “Internet exposed.” It reports observed host facts, host-policy inference, confidence, and limitations separately.
+PortCVE does not call a wildcard bind “Internet exposed” or an advisory match “exploitable.” It reports observed host facts, known-advisory evidence, confidence, and limitations separately.
 
 > Status: `0.1.0-alpha.1`. Windows x64 is the only supported release target today. The CLI and JSON schemas can still change before `1.0`.
 >
-> Naming status: **BindWitness is the public project name.** Exact-name checks on 2026-08-09 found no obvious software collision across GitHub, PyPI, npm, crates.io, or NuGet. This screening is not formal trademark clearance.
+> Naming status: **PortCVE is the current project and CLI name.** The `v0.1.0-alpha.1` release was originally published as **BindWitness**; that historical artifact remains a BindWitness build. Exact PortCVE name checks on 2026-08-09 found no repository or package collision across GitHub, PyPI, npm, crates.io, or NuGet. This screening is not formal trademark clearance.
 
 ## Why this exists
 
-`netstat`, TCPView, and PowerShell can show sockets and owners. BindWitness is for the next question:
+`netstat`, TCPView, and PowerShell can show sockets and owners. PortCVE is for the next question:
 
-> What opened this port, where can it receive traffic, what does the host firewall say, and is this new?
+> What opened this port, where can it receive traffic, what does the host firewall say, do its exact packages match known advisories, and is this new?
 
 It is designed for developers, defenders, incident responders, lab machines, and Windows hardening checks—not remote scanning.
 
@@ -31,7 +32,7 @@ It is designed for developers, defenders, incident responders, lab machines, and
 Illustrative Docker-published port:
 
 ```text
-PS> bindwitness tcp:8080 --evidence
+PS> portcve tcp:8080 --evidence
 
 TCP4  0.0.0.0:8080  LISTEN
 
@@ -64,11 +65,11 @@ LIMITATIONS
     the host socket may be owned by a Docker Desktop forwarding process.
 ```
 
-BindWitness reads published-port metadata from the local Docker Engine named pipe and attaches it only when protocol, host address, and host port match an observed Windows endpoint. That tuple join is useful but intentionally reported with medium confidence; it is not direct proof of guest-process socket ownership.
+PortCVE reads published-port metadata from the local Docker Engine named pipe and attaches it only when protocol, host address, and host port match an observed Windows endpoint. That tuple join is useful but intentionally reported with medium confidence; it is not direct proof of guest-process socket ownership.
 
 ### Live Docker validation
 
-The integrated path was exercised on 2026-08-09 using Windows NT `10.0.26200.0`, Docker Desktop client/server `28.3.2`, and the `desktop-linux` WSL2 context. An official `alpine:3.22` fixture (`sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce`) published TCP `127.0.0.1:64458 -> 8080` and UDP `0.0.0.0:51731 -> 5353`; both returned real echo payloads. An independent Windows CIM check saw those exact host tuples owned by PID `30176`, while BindWitness kept the observed owner `com.docker.backend.exe` and attached both container publications with the Docker collector `complete`.
+The integrated path was exercised on 2026-08-09 using Windows NT `10.0.26200.0`, Docker Desktop client/server `28.3.2`, and the `desktop-linux` WSL2 context. An official `alpine:3.22` fixture (`sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce`) published TCP `127.0.0.1:64458 -> 8080` and UDP `0.0.0.0:51731 -> 5353`; both returned real echo payloads. An independent Windows CIM check saw those exact host tuples owned by PID `30176`, while the then-named BindWitness build kept the observed owner `com.docker.backend.exe` and attached both container publications with the Docker collector `complete`.
 
 A container-aware lock recorded `evidence.containers: complete` and `owner_identity_strength: container_image`; an unchanged `check` passed. Replacing the same TCP host endpoint with PowerShell produced exit code `1` and `owner_changed`. This validates local Docker collection, tuple correlation, and baseline drift behavior on that environment. It does **not** prove external reachability, guest-process socket ownership, broader Docker-version compatibility, or Linux host support.
 
@@ -82,11 +83,25 @@ The script is intentionally mutating: it may pull `alpine:3.22`, creates and rem
 
 The reachability wording is intentional. `STATIC ALLOW` and `STATIC BLOCK` summarize a static assessment of Windows Firewall configuration; they are not results from the Windows Filtering Platform packet-classification path. A local socket table and firewall rules cannot prove what a third-party WFP filter, IPsec negotiation, router, cloud security group, VPN, or remote host will do.
 
+### Live vulnerability validation
+
+The offline scan path was exercised on 2026-08-09 with official Trivy `v0.73.0`, an isolated schema-2 database, and the immutable local Docker image ID `sha256:c4d56c24da4f009ecf8352146b43497fe78953edb4c679b841732beb97e588b0` (Alpine 3.22.1). PortCVE reported 87 known-advisory matches: 3 critical, 17 high, 26 medium, and 41 low. A fresh strict scan returned `0`; `--fail-on high` and `--fail-on critical` returned `1`; missing and 96-hour-stale databases returned `3` without converting incomplete evidence into a clean result.
+
+The same run validated default/private redaction, Draft 2020-12 schema conformance, hostile inherited `TRIVY_*` scrubbing, zero image pulls, and per-scan temp cleanup. These results prove the tested local correlation, parsing, policy, and exit-code paths—not that every finding is reachable or exploitable. Exact hashes, representative findings, and claim boundaries are recorded in [docs/validation.md](docs/validation.md).
+
 ## Install
 
-### Release binary
+### Signed installer
 
-Download the Windows x64 ZIP from the repository's Releases page, verify its SHA-256 file, extract `bindwitness.exe`, and place it somewhere on your `PATH`.
+For finalized signed releases, download, checksum, Authenticode-verify, inspect, and run the release's file-backed `install.ps1`. It refuses piped or in-memory execution, verifies its own signer before network or filesystem activity, installs without administrator rights to `%LOCALAPPDATA%\Programs\PortCVE`, verifies the versioned ZIP and signed executable, and updates the user `PATH` with rollback protection. See the complete [installer instructions and trust checks](docs/install.md).
+
+The checked-in `scripts/install.ps1` is an unsigned, unfinalized template and deliberately refuses to run. Production installation requires the separately downloaded and signed release asset; pipe-to-execution installation is refused.
+
+The installer never permits an unsigned production install. The historical `v0.1.0-alpha.1` release is unsigned and is intentionally rejected.
+
+### Manual release binary
+
+Download the Windows x64 ZIP from the repository's Releases page, verify its SHA-256 file, extract `portcve.exe`, and place it somewhere on your `PATH`.
 
 Release binaries are self-contained; the .NET runtime is not required. Alpha binaries are not yet code-signed, so verify checksums before running them.
 
@@ -95,39 +110,41 @@ Release binaries are self-contained; the .NET runtime is not required. Alpha bin
 Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), then:
 
 ```powershell
-cd bindwitness
-dotnet restore BindWitness.sln --locked-mode
-dotnet test BindWitness.sln -c Release --no-restore
-dotnet publish src\BindWitness\BindWitness.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts\win-x64
+cd portcve
+dotnet restore PortCVE.sln --locked-mode
+dotnet test PortCVE.sln -c Release --no-restore
+dotnet publish src\PortCVE\PortCVE.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts\win-x64
 ```
 
 ## Commands
 
 ```powershell
-bindwitness                              # fast local inventory
-bindwitness 8080                         # explain TCP and UDP binds on a port
-bindwitness tcp:8080 --evidence          # protocol-specific deep explanation
-bindwitness list --scope non-loopback    # filter likely remote-facing binds
-bindwitness list --process node.exe      # filter by process or service
-bindwitness snapshot --json              # full versioned evidence document
-bindwitness lock -o listeners.lock.json  # normalized baseline, no PID or raw args
-bindwitness lock --include-udp            # opt into noisier UDP baseline tracking
-bindwitness diff listeners.lock.json     # report all current drift
-bindwitness check listeners.lock.json    # CI-friendly security drift gate
-bindwitness watch --json                 # stream changes as JSONL
-bindwitness doctor                       # collection coverage and privacy mode
+portcve                              # fast local inventory
+portcve 8080                         # explain TCP and UDP binds on a port
+portcve tcp:8080 --evidence          # protocol-specific deep explanation
+portcve list --scope non-loopback    # filter likely remote-facing binds
+portcve list --process node.exe      # filter by process or service
+portcve snapshot --json              # full versioned evidence document
+portcve scan tcp:8080 --strict        # offline advisory matches for one exact listener
+portcve scan --all --fail-on high     # deduplicated Docker-image scan and CI gate
+portcve lock -o listeners.lock.json  # normalized baseline, no PID or raw args
+portcve lock --include-udp            # opt into noisier UDP baseline tracking
+portcve diff listeners.lock.json     # report all current drift
+portcve check listeners.lock.json    # CI-friendly security drift gate
+portcve watch --json                 # stream changes as JSONL
+portcve doctor                       # collection coverage and privacy mode
 ```
 
 Direct port inspection collects Windows Firewall evidence by default. Fast inventory, lock, and watch do not; add `--firewall` when you need policy correlation and accept the extra collection time.
 
-Run `bindwitness help` for the concise built-in reference. The complete option behavior, including privacy and baseline flags, is documented in [docs/cli.md](docs/cli.md).
+Run `portcve help` for the concise built-in reference. The complete option behavior, including privacy and baseline flags, is documented in [docs/cli.md](docs/cli.md).
 
 ## Baseline workflow
 
 Create a baseline when the machine is in a known-good state:
 
 ```powershell
-bindwitness lock -o listeners.lock.json
+portcve lock -o listeners.lock.json
 ```
 
 Lockfiles are TCP-only by default. Use `--include-udp` only when UDP bind drift matters to the review. UDP is connectionless, duplicate/reused binds are valid, and short-lived endpoints can create substantially more baseline churn. The `includes_udp` choice is stored in the lockfile and reused by later `diff` and `check` runs.
@@ -135,13 +152,13 @@ Lockfiles are TCP-only by default. Use `--include-udp` only when UDP bind drift 
 Review all drift:
 
 ```powershell
-bindwitness diff listeners.lock.json
+portcve diff listeners.lock.json
 ```
 
 Gate a build, image, kiosk, or lab host:
 
 ```powershell
-bindwitness check listeners.lock.json
+portcve check listeners.lock.json
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 ```
 
@@ -155,12 +172,13 @@ Container evidence has its own completeness field. If the local Docker Engine re
 
 ## Evidence model
 
-BindWitness keeps four layers separate:
+PortCVE keeps five layers separate:
 
 1. **Observed bind:** address, port, protocol, owning PID, executable/service, and bind scope.
 2. **Local runtime correlation:** Docker Engine published-port metadata joined to an observed bind by protocol, host address, and host port, always with medium confidence and a tuple-correlation limitation.
 3. **Static host-policy inference:** merged Windows Firewall profiles and matching inbound-rule evidence, with `allow`, `block`, `mixed`, or `unknown` plus confidence and limitations.
-4. **External path:** always `not tested` in the current release.
+4. **Known-advisory match:** Trivy results for an immutable local Docker image ID or explicit local SBOM, with database identity/freshness and no exploitability claim.
+5. **External path:** always `not tested` in the current release.
 
 `UNKNOWN` is a valid result. Missing permissions, unsupported firewall constraints, process churn, WSL, third-party WFP filters, IPsec, and upstream network controls are not converted into false certainty. A Docker publication with no matching Windows endpoint remains a diagnostic and never becomes a synthetic listener.
 
@@ -182,8 +200,8 @@ The native socket row is direct point-in-time evidence from the host, although c
 The default contract is deliberately small:
 
 - read-only—no process killing or firewall changes;
-- local/offline by default—collection uses local OS APIs and, when available, the local Docker Engine named pipe; it performs no telemetry, DNS resolution, reputation lookup, image pull, or sample upload;
-- no process environment-variable reads;
+- local/offline by default—collection uses local OS APIs and, when available, the local Docker Engine named pipe; vulnerability scans use a separately installed Trivy executable and pre-populated local database with online/update/telemetry paths disabled; PortCVE performs no reputation lookup, image pull, or sample upload;
+- no target-process environment-variable reads;
 - no command-line collection;
 - no remote scan or external reachability probe; and
 - diagnostics go to stderr so JSON stdout remains machine-readable.
@@ -198,10 +216,11 @@ For Docker correlations, default JSON replaces container IDs, container names, a
 
 ## Machine-readable output
 
-All JSON uses snake_case, stable enum strings, a mandatory `schema_version`, deterministic listener ordering, and diagnostics for partial collectors. Schema identifiers are stable URNs (`urn:bindwitness:schema:snapshot:v1` and `urn:bindwitness:schema:lock:v1`); they do not depend on a project website.
+All JSON uses snake_case, stable enum strings, a mandatory `schema_version`, deterministic ordering, and diagnostics for partial evidence. Schema identifiers are stable URNs; they do not depend on a project website.
 
-- [Snapshot schema v1](schema/bindwitness.snapshot.v1.schema.json)
-- [Lockfile schema v1](schema/bindwitness.lock.v1.schema.json)
+- [Snapshot schema v1](schema/portcve.snapshot.v1.schema.json)
+- [Lockfile schema v1](schema/portcve.lock.v1.schema.json)
+- [Vulnerability report schema v1](schema/portcve.vulnerability.v1.schema.json)
 
 Human-readable output is not a compatibility API. JSON and lockfile schema changes follow the policy in [docs/versioning.md](docs/versioning.md).
 
@@ -214,8 +233,9 @@ Included now:
 - loopback/interface/wildcard classification;
 - active Windows network-profile mapping;
 - local Docker Engine named-pipe collection and medium-confidence published-port correlation;
+- offline known-advisory matching for immutable local Docker image IDs and explicit local SBOMs, with database freshness and CI exit gates;
 - opt-in static Windows Firewall correlation;
-- list, inspect, snapshot, lock, diff, check, watch, and doctor workflows;
+- list, inspect, scan, snapshot, lock, diff, check, watch, and doctor workflows;
 - text, JSON, and JSONL output; and
 - standard-user degradation with explicit diagnostics.
 
@@ -226,6 +246,7 @@ Not included:
 - process termination or automatic firewall changes;
 - a generic “risk score”;
 - proof of LAN or Internet reachability;
+- exploitability proof, automatic remediation, automatic database downloads, or guessed CPEs from process/port names;
 - WSL guest-process or Kubernetes workload attribution; or
 - Linux support yet.
 
@@ -234,10 +255,10 @@ See [ROADMAP.md](ROADMAP.md) for the deliberately staged follow-up work.
 ## Development
 
 ```powershell
-dotnet restore BindWitness.sln --locked-mode
-dotnet build BindWitness.sln -c Release --no-restore
-dotnet test BindWitness.sln -c Release --no-build
-dotnet run --project src\BindWitness -- doctor
+dotnet restore PortCVE.sln --locked-mode
+dotnet build PortCVE.sln -c Release --no-restore
+dotnet test PortCVE.sln -c Release --no-build
+dotnet run --project src\PortCVE -- doctor
 ```
 
 Runtime code has no third-party package dependency. Tests use xUnit. Committed NuGet lockfiles make `--locked-mode` fail if dependency resolution drifts. Warnings are treated as errors.

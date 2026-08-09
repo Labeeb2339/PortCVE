@@ -1,4 +1,4 @@
-# Contributing to BindWitness
+# Contributing to PortCVE
 
 Thanks for helping make local exposure evidence more trustworthy.
 
@@ -13,10 +13,10 @@ Small bug fixes and tests can go directly to a pull request.
 Use Windows x64 and the .NET 10 SDK:
 
 ```powershell
-dotnet restore BindWitness.sln --locked-mode
-dotnet format BindWitness.sln --verify-no-changes --no-restore
-dotnet build BindWitness.sln -c Release --no-restore
-dotnet test BindWitness.sln -c Release --no-build
+dotnet restore PortCVE.sln --locked-mode
+dotnet format PortCVE.sln --verify-no-changes --no-restore
+dotnet build PortCVE.sln -c Release --no-restore
+dotnet test PortCVE.sln -c Release --no-build
 ```
 
 NuGet lockfiles are committed. Keep them synchronized with intentional package changes; `--locked-mode` should fail unexpected dependency-resolution drift.

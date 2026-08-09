@@ -30,7 +30,7 @@ The order matters: correctness and evidence quality come before more platforms o
 
 - Linux collector backend using native socket/process and nftables evidence
 - Event-driven collectors where the platform offers reliable ownership events
-- Signed provenance and an SBOM for release artifacts
+- CycloneDX SBOM generation for release artifacts
 
 ## Explicitly not planned for v1
 

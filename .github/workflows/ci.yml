@@ -14,43 +14,51 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.101
 
+      - name: Verify installer security invariants on Windows PowerShell 5.1
+        shell: powershell
+        run: ./scripts/tests/Test-Installer.ps1
+
+      - name: Verify RFC 3161 signer binding on PowerShell 7
+        shell: pwsh
+        run: ./scripts/tests/Test-Rfc3161Timestamp.ps1
+
       - name: Restore
-        run: dotnet restore BindWitness.sln --locked-mode
+        run: dotnet restore PortCVE.sln --locked-mode
 
       - name: Verify formatting
-        run: dotnet format BindWitness.sln --verify-no-changes --no-restore
+        run: dotnet format PortCVE.sln --verify-no-changes --no-restore
 
       - name: Build
-        run: dotnet build BindWitness.sln -c Release --no-restore
+        run: dotnet build PortCVE.sln -c Release --no-restore
 
       - name: Test
-        run: dotnet test BindWitness.sln -c Release --no-build --logger "trx;LogFileName=tests.trx" --collect "XPlat Code Coverage" --results-directory TestResults
+        run: dotnet test PortCVE.sln -c Release --no-build --logger "trx;LogFileName=tests.trx" --collect "XPlat Code Coverage" --results-directory TestResults
 
       - name: Publish Windows x64
-        run: dotnet publish src/BindWitness/BindWitness.csproj -c Release -r win-x64 --self-contained true --no-build -o artifacts/win-x64
+        run: dotnet publish src/PortCVE/PortCVE.csproj -c Release -r win-x64 --self-contained true --no-build -o artifacts/win-x64
 
       - name: Smoke test
         shell: pwsh
         run: |
-          ./artifacts/win-x64/bindwitness.exe --version
-          $json = ./artifacts/win-x64/bindwitness.exe snapshot --no-firewall 2>$null | ConvertFrom-Json
+          ./artifacts/win-x64/portcve.exe --version
+          $json = ./artifacts/win-x64/portcve.exe snapshot --no-firewall 2>$null | ConvertFrom-Json
           if ($json.schema_version -ne 1) { throw 'Unexpected snapshot schema.' }
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: test-results
           path: TestResults/
 
       - name: Upload smoke artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          name: bindwitness-win-x64
-          path: artifacts/win-x64/bindwitness.exe
+          name: portcve-win-x64
+          path: artifacts/win-x64/portcve.exe

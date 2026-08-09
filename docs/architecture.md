@@ -1,6 +1,6 @@
 # Architecture
 
-BindWitness is a collection-and-correlation CLI. It does not sniff packets and does not execute untrusted code.
+PortCVE is a collection-and-correlation CLI. It does not sniff packets and does not execute untrusted code.
 
 ## Pipeline
 
@@ -11,13 +11,14 @@ BindWitness is a collection-and-correlation CLI. It does not sniff packets and d
 5. The Docker collector probes the local `\\.\pipe\docker_engine` named pipe, negotiates the Engine API version, reads running-container publications, and correlates them to observed endpoints by protocol, host address, and host port.
 6. The optional firewall collector reads the merged `ActiveStore` through structured NetSecurity CIM objects and joins rule filters by stable rule ID.
 7. The evaluator separates exact matches from conditional or unsupported rules. Unresolved predicates lower confidence and can produce `mixed` or `unknown`.
-8. Renderers emit human text, versioned JSON, JSONL events, or normalized lockfiles.
+8. For `scan`, the vulnerability layer selects only immutable correlated Docker image IDs or an explicitly supplied local SBOM, invokes a separately installed Trivy process in offline mode, and records database freshness and provider completeness.
+9. Renderers emit human text, versioned JSON, JSONL events, normalized lockfiles, or vulnerability reports.
 
 Native socket collection and a bounded Docker named-pipe probe run for every live collection. If the pipe is absent, the Docker collector returns `unavailable` quickly and does not start Docker Desktop or any container. Windows Firewall collection is intentionally opt-in for inventory, lock, and watch because effective rule enumeration is much slower.
 
 ## Evidence source boundary
 
-BindWitness labels evidence by source because the sources have different semantics:
+PortCVE labels evidence by source because the sources have different semantics:
 
 | Evidence | Source | Claim boundary |
 | --- | --- | --- |
@@ -26,13 +27,22 @@ BindWitness labels evidence by source because the sources have different semanti
 | Adapter address and state | Local .NET network-interface APIs | Local adapter configuration observed during the collection window. |
 | Network profile | Local `Get-NetConnectionProfile` | Structured CIM configuration used to map an adapter to a Windows profile. |
 | Docker published-port metadata | Local Docker Engine `/version` and negotiated `/containers/json` over `\\.\pipe\docker_engine` | Runtime-declared mapping for a running container; correlated to a host socket by tuple with medium confidence, not proof that the container owns the Windows socket. |
-| Firewall profile/rules/filters | Local NetSecurity commands against `ActiveStore` | Static configuration evidence consumed by BindWitness's evaluator, not a live WFP packet-classification result. |
+| Firewall profile/rules/filters | Local NetSecurity commands against `ActiveStore` | Static configuration evidence consumed by PortCVE's evaluator, not a live WFP packet-classification result. |
+| Package advisory matches | Separately installed Trivy, immutable local Docker image ID or explicit local SBOM, and pre-populated local database | Known-advisory match for an observed package version; not proof of reachability, exploitability, or compromise. |
 
 The PowerShell scripts are bundled constants and do not interpolate CLI input. They run locally, but `--resolve-accounts` separately calls Windows account lookup APIs; Windows can contact domain services when a SID is not local or cached.
 
 ## Data boundaries
 
-The core model contains platform-neutral listeners, owners, interfaces, container publications, policy evidence, diagnostics, and collector status. Win32 and Docker transport/parser structures remain in their collection layers.
+The core model contains platform-neutral listeners, owners, interfaces, container publications, policy evidence, vulnerability subjects/findings/provider runs, diagnostics, and evidence status. Win32, Docker transport, and Trivy parser structures remain in their collection layers.
+
+## Offline vulnerability assessment
+
+`scan` begins from the same point-in-time listener snapshot used by the rest of the CLI. It never guesses a product from a native process name, executable metadata, banner, or port number. Automatic Docker association requires a correlated immutable `sha256:` image ID; an SBOM association exists only when the user supplies that local file for an exact TCP-port query.
+
+Before Trivy starts, PortCVE validates the cache, database, SBOM, and per-invocation temp paths as local-drive paths without reparse traversal. It removes every inherited `TRIVY_*` setting case-insensitively, then sets a small offline allowlist. The child process runs without a shell, with bounded stdout/stderr, a timeout, bounded post-kill waiting, and guarded temp cleanup. Missing or malformed evidence is unavailable, stale evidence is partial, and malformed Trivy result structures fail closed.
+
+Findings retain the advisory ID, package/version, fixes, source severity, aliases, references, database time, and subject identity confidence. The report explicitly sets exploitability and network reachability to `not_assessed`. A zero-finding result means only that no known matches were present in the named database snapshot.
 
 Each collector reports:
 
@@ -50,7 +60,7 @@ Each Engine publication is matched against Windows IP Helper evidence using tran
 
 When a lockfile includes complete container evidence and every correlated publication supplies an image ID, the normalized owner is `container-image-set:<sha256>` with strength `container_image`. The digest is computed over the sorted distinct image-ID set, so container names and restart-specific IDs are excluded while an image-set change remains detectable. `evidence.containers` distinguishes `complete`, `partial`, and `not_collected`; a baseline that used container evidence requires comparable evidence during `diff` and `check`. Dimension-level loss is emitted as `evidence_regressed`; strict diff and check return exit code `3` instead of presenting an evidence gap as no drift.
 
-The integrated path was validated on 2026-08-09 against Docker Desktop client/server 28.3.2 on Windows NT 10.0.26200.0 with the `desktop-linux` WSL2 context. An official `alpine:3.22` fixture published one loopback TCP tuple and one wildcard UDP tuple; both echoed real payloads, an independent Windows CIM check observed the exact tuples, and BindWitness correlated both while retaining `com.docker.backend.exe` as the Windows owner. A container-image lock passed unchanged, then reported `owner_changed` with exit code 1 when PowerShell replaced the same TCP endpoint. This is validation of the local collection/correlation/gating path on that environment, not a claim about external reachability, guest-process ownership, Linux hosts, or every Docker version.
+The integrated path was validated on 2026-08-09 against Docker Desktop client/server 28.3.2 on Windows NT 10.0.26200.0 with the `desktop-linux` WSL2 context. An official `alpine:3.22` fixture published one loopback TCP tuple and one wildcard UDP tuple; both echoed real payloads, an independent Windows CIM check observed the exact tuples, and the then-named BindWitness build correlated both while retaining `com.docker.backend.exe` as the Windows owner. A container-image lock passed unchanged, then reported `owner_changed` with exit code 1 when PowerShell replaced the same TCP endpoint. This is validation of the local collection/correlation/gating path on that environment, not a claim about external reachability, guest-process ownership, Linux hosts, or every Docker version.
 
 ## Listener identity
 
