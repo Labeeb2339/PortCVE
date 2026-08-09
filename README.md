@@ -1,13 +1,16 @@
 # PortCVE
 
-**Explain local ports. Check what backs them. Lock what you expect.**
+**Audit local listeners. Fingerprint authorized remote services. Correlate evidence to CVEs.**
 
-PortCVE is a read-only Windows CLI that connects the facts other port tools leave separate:
+PortCVE is a non-destructive Windows CLI that connects the facts other port tools leave separate:
 
 - which TCP listeners and UDP endpoints exist;
 - which process or Windows service owns each bind;
 - which local Docker Engine publication maps a container port to that observed host bind;
 - which known vulnerability advisories match packages in an exactly identified local Docker image or explicitly supplied SBOM;
+- which TCP services are reachable on an explicitly authorized host or IPv4 CIDR, with bounded HTTP/TLS/greeting evidence;
+- which strong remote product/version fingerprints map to direct, conditional, or inconclusive NVD CVE candidates;
+- how to normalize existing Nmap XML and Nuclei JSONL evidence without executing either scanner;
 - whether the bind is loopback-only, interface-specific, or wildcard;
 - which active interfaces and network profiles it covers;
 - what a static evaluation of the merged Windows Firewall policy suggests; and
@@ -15,7 +18,7 @@ PortCVE is a read-only Windows CLI that connects the facts other port tools leav
 
 PortCVE does not call a wildcard bind “Internet exposed” or an advisory match “exploitable.” It reports observed host facts, known-advisory evidence, confidence, and limitations separately.
 
-> Status: `0.1.0-alpha.1`. Windows x64 is the only supported release target today. The CLI and JSON schemas can still change before `1.0`.
+> Status: `0.2.0-alpha.1` under development. Windows x64 is the only supported release target today. The CLI and JSON schemas can still change before `1.0`.
 >
 > Naming status: **PortCVE is the current project and CLI name.** The `v0.1.0-alpha.1` release was originally published as **BindWitness**; that historical artifact remains a BindWitness build. Exact PortCVE name checks on 2026-08-09 found no repository or package collision across GitHub, PyPI, npm, crates.io, or NuGet. This screening is not formal trademark clearance.
 
@@ -25,7 +28,7 @@ PortCVE does not call a wildcard bind “Internet exposed” or an advisory matc
 
 > What opened this port, where can it receive traffic, what does the host firewall say, do its exact packages match known advisories, and is this new?
 
-It is designed for developers, defenders, incident responders, lab machines, and Windows hardening checks—not remote scanning.
+It is designed for developers, defenders, incident responders, authorized pentesters, lab machines, and Windows hardening checks. Remote assessment is explicit, rate-limited, non-authenticated, and non-destructive; PortCVE is not an exploit framework.
 
 ## Quick demo
 
@@ -89,6 +92,12 @@ The offline scan path was exercised on 2026-08-09 with official Trivy `v0.73.0`,
 
 The same run validated default/private redaction, Draft 2020-12 schema conformance, hostile inherited `TRIVY_*` scrubbing, zero image pulls, and per-scan temp cleanup. These results prove the tested local correlation, parsing, policy, and exit-code paths—not that every finding is reachable or exploitable. Exact hashes, representative findings, and claim boundaries are recorded in [docs/validation.md](docs/validation.md).
 
+### Live remote validation
+
+The authorized remote path was exercised on 2026-08-09 against disposable listeners bound only to `127.0.0.1`. PortCVE observed OpenSSH `9.6p1` and a silent Apache HTTP Server `2.4.58` fixture on two OS-assigned high ports. Discovery sent zero bytes to the unknown HTTP service and did not guess its identity. `--active` then identified it through exactly one fresh `HEAD /` request with evidence source `active-adaptive-http-head`; no other method or path was observed. Default/private redaction, schema-compatible output, timeouts, process cleanup, listener cleanup, and temporary-file cleanup passed.
+
+This proves the tested loopback discovery and adaptive-HTTP path—not authorization for another target, external reachability, adaptive TLS, CVE applicability, or exploitability. The reproducible harness and exact claim boundary are in [docs/remote-live-validation.md](docs/remote-live-validation.md).
+
 ## Install
 
 ### Signed installer
@@ -127,6 +136,10 @@ portcve list --process node.exe      # filter by process or service
 portcve snapshot --json              # full versioned evidence document
 portcve scan tcp:8080 --strict        # offline advisory matches for one exact listener
 portcve scan --all --fail-on high     # deduplicated Docker-image scan and CI gate
+portcve scan-host 10.0.0.5 --authorized  # bounded remote TCP discovery and fingerprinting
+portcve scan-host app.test --ports 22,443 --authorized --online-advisories
+portcve import nmap .\scan.xml        # normalize existing Nmap XML evidence
+portcve import nuclei .\findings.jsonl # normalize existing Nuclei JSONL evidence
 portcve lock -o listeners.lock.json  # normalized baseline, no PID or raw args
 portcve lock --include-udp            # opt into noisier UDP baseline tracking
 portcve diff listeners.lock.json     # report all current drift
@@ -172,13 +185,14 @@ Container evidence has its own completeness field. If the local Docker Engine re
 
 ## Evidence model
 
-PortCVE keeps five layers separate:
+PortCVE keeps six layers separate:
 
 1. **Observed bind:** address, port, protocol, owning PID, executable/service, and bind scope.
 2. **Local runtime correlation:** Docker Engine published-port metadata joined to an observed bind by protocol, host address, and host port, always with medium confidence and a tuple-correlation limitation.
 3. **Static host-policy inference:** merged Windows Firewall profiles and matching inbound-rule evidence, with `allow`, `block`, `mixed`, or `unknown` plus confidence and limitations.
 4. **Known-advisory match:** Trivy results for an immutable local Docker image ID or explicit local SBOM, with database identity/freshness and no exploitability claim.
-5. **External path:** always `not tested` in the current release.
+5. **Authorized remote observation:** a successful TCP connection, protocol greeting, HTTP response, or TLS handshake observed by `scan-host`, with bounded evidence and no exploitability claim.
+6. **Remote advisory candidate:** a strong protocol-banner identity mapped through the verified catalog and NVD configuration evidence. Conditional and inconclusive applicability remain separate from direct candidates.
 
 `UNKNOWN` is a valid result. Missing permissions, unsupported firewall constraints, process churn, WSL, third-party WFP filters, IPsec, and upstream network controls are not converted into false certainty. A Docker publication with no matching Windows endpoint remains a diagnostic and never becomes a synthetic listener.
 
@@ -199,11 +213,12 @@ The native socket row is direct point-in-time evidence from the host, although c
 
 The default contract is deliberately small:
 
-- read-only—no process killing or firewall changes;
-- local/offline by default—collection uses local OS APIs and, when available, the local Docker Engine named pipe; vulnerability scans use a separately installed Trivy executable and pre-populated local database with online/update/telemetry paths disabled; PortCVE performs no reputation lookup, image pull, or sample upload;
+- local host state is read-only—no process killing or firewall changes;
+- local/offline by default—local collection uses OS APIs and, when available, the local Docker Engine named pipe; local vulnerability scans use a separately installed Trivy executable and pre-populated local database with online/update/telemetry paths disabled;
 - no target-process environment-variable reads;
 - no command-line collection;
-- no remote scan or external reachability probe; and
+- remote connections occur only through `scan-host` after `--authorized`; NVD access additionally requires `--online-advisories`;
+- remote mode has no credentials, brute force, exploit payloads, state-changing requests, crawling, fuzzing, denial-of-service checks, stealth/evasion, or arbitrary template/code execution; and
 - diagnostics go to stderr so JSON stdout remains machine-readable.
 
 Running elevated may reveal more process metadata, but the socket inventory still works for a standard user and reports gaps explicitly.
@@ -221,6 +236,8 @@ All JSON uses snake_case, stable enum strings, a mandatory `schema_version`, det
 - [Snapshot schema v1](schema/portcve.snapshot.v1.schema.json)
 - [Lockfile schema v1](schema/portcve.lock.v1.schema.json)
 - [Vulnerability report schema v1](schema/portcve.vulnerability.v1.schema.json)
+- [Remote assessment schema v1](schema/portcve.remote.v1.schema.json)
+- [External evidence import schema v1](schema/portcve.import.v1.schema.json)
 
 Human-readable output is not a compatibility API. JSON and lockfile schema changes follow the policy in [docs/versioning.md](docs/versioning.md).
 
@@ -234,14 +251,17 @@ Included now:
 - active Windows network-profile mapping;
 - local Docker Engine named-pipe collection and medium-confidence published-port correlation;
 - offline known-advisory matching for immutable local Docker image IDs and explicit local SBOMs, with database freshness and CI exit gates;
+- authorized TCP host/CIDR discovery with frozen DNS, bounded concurrency/rate/timeouts/evidence, safe HTTP/TLS/greeting probes, and privacy-reduced JSON;
+- conservative explicit-online NVD enrichment for verified catalog-backed remote identities, including conditional applicability;
+- bounded import-only interoperability for Nmap XML and Nuclei JSONL;
 - opt-in static Windows Firewall correlation;
-- list, inspect, scan, snapshot, lock, diff, check, watch, and doctor workflows;
+- list, inspect, local scan, authorized scan-host, import, snapshot, lock, diff, check, watch, and doctor workflows;
 - text, JSON, and JSONL output; and
 - standard-user degradation with explicit diagnostics.
 
 Not included:
 
-- remote port scanning;
+- exploitation, credential attacks, brute force, fuzzing, denial of service, stealth/evasion, or state-changing remote checks;
 - traffic capture or throughput graphs;
 - process termination or automatic firewall changes;
 - a generic “risk score”;

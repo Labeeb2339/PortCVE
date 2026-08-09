@@ -40,17 +40,36 @@ internal static class LocalPathPolicy
 
     public static LocalPathValidation ValidateExistingLocalFile(string path)
     {
-        return ValidateLocalFile(path, requireExists: true);
+        return ValidateLocalFile(path, requireExists: true, "sbom_path", "SBOM");
     }
 
     public static LocalPathValidation ValidateOptionalLocalFile(string path)
     {
-        return ValidateLocalFile(path, requireExists: false);
+        return ValidateLocalFile(path, requireExists: false, "sbom_path", "SBOM");
     }
 
-    private static LocalPathValidation ValidateLocalFile(string path, bool requireExists)
+    public static LocalPathValidation ValidateExistingImportFile(string path)
     {
-        var resolved = Resolve(path, "sbom_path");
+        return ValidateLocalFile(path, requireExists: true, "import_path", "Import input");
+    }
+
+    public static LocalPathValidation ValidateOptionalImportOutputFile(string path)
+    {
+        return ValidateLocalFile(path, requireExists: false, "import_output_path", "Import output");
+    }
+
+    public static LocalPathValidation ValidateOptionalRemoteOutputFile(string path)
+    {
+        return ValidateLocalFile(path, requireExists: false, "remote_output_path", "Remote report output");
+    }
+
+    private static LocalPathValidation ValidateLocalFile(
+        string path,
+        bool requireExists,
+        string codePrefix,
+        string displayName)
+    {
+        var resolved = Resolve(path, codePrefix);
         if (!resolved.IsValid)
         {
             return resolved;
@@ -58,17 +77,17 @@ internal static class LocalPathPolicy
 
         var fullPath = resolved.FullPath!;
         var root = Path.GetPathRoot(fullPath)!;
-        var inspection = InspectComponents(fullPath, root, allowMissingTail: !requireExists, "sbom_path");
+        var inspection = InspectComponents(fullPath, root, allowMissingTail: !requireExists, codePrefix);
         if (!inspection.IsValid)
         {
             return inspection.IsMissing && requireExists
-                ? Invalid("sbom_not_found", $"SBOM file not found: '{fullPath}'.")
+                ? Invalid($"{codePrefix}_not_found", $"{displayName} file not found: '{fullPath}'.")
                 : Invalid(inspection.Code!, inspection.Message!);
         }
 
         if (inspection.FinalExists && IsDirectory(inspection.FinalAttributes))
         {
-            return Invalid("sbom_path_invalid", "The SBOM path must name a regular file, not a directory.");
+            return Invalid($"{codePrefix}_invalid", $"The {displayName.ToLowerInvariant()} path must name a regular file, not a directory.");
         }
 
         return new(true, fullPath, "ok", "The path is a local regular file.");

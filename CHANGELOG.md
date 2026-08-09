@@ -7,9 +7,12 @@ All notable changes will be documented here. The project follows semantic versio
 - Renamed the project, executable, namespaces, schemas, scripts, and release artifacts from BindWitness (`bindwitness`) to PortCVE (`portcve`); no behavior changed as part of the rename.
 - Added `scan` for offline known-advisory matching against immutable local Docker image IDs and explicit local SBOMs, with a versioned JSON schema, redaction, database-freshness evidence, and `--strict`/`--fail-on` exit gates.
 - Hardened the Trivy boundary with local non-reparse cache/SBOM/temp validation, inherited environment scrubbing, strict result parsing, bounded process termination, and guarded cleanup.
+- Added `scan-host` for explicitly authorized, rate-limited TCP host/CIDR discovery, protocol-bound greeting/HTTP/TLS fingerprinting, privacy-reduced remote JSON, and bounded safe-active HTTP/TLS posture checks.
+- Added explicit-online, catalog-backed NVD correlation with provenance-bound identities, preserved applicability conditions and enrichment status, candidate-only wording, and process-wide rate limiting.
+- Added import-only Nmap XML and Nuclei JSONL normalization with local non-reparse inputs, bounded parsers, source hashing, versioned JSON, and no scanner/template execution.
 - Added a file-backed, self-verifying PowerShell installer template and a fail-closed release workflow that signs and independently verifies both `portcve.exe` and `install.ps1`.
 - Added cryptographic RFC 3161 token decoding, signer-info imprint binding, trusted TSA matching, full-SHA GitHub Actions pinning, release checksums, metadata, and provenance attestation.
-- Live-validated Docker TCP/UDP correlation and the offline vulnerability path; see `docs/validation.md` for dated evidence and claim boundaries.
+- Live-validated Docker TCP/UDP correlation, the offline vulnerability path, and authorized adaptive HTTP discovery on a random loopback port; see `docs/validation.md` and `docs/remote-live-validation.md` for dated evidence and claim boundaries.
 
 ## 0.1.0-alpha.1 - 2026-08-09
 

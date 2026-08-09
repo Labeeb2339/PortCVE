@@ -19,7 +19,15 @@ The order matters: correctness and evidence quality come before more platforms o
 - Binary hashing as an explicit opt-in baseline field
 - Better protected-service owner-module enrichment when elevated
 
-## 0.3 policy workflows
+## 0.3 remote assessment hardening
+
+- More protocol negotiation without authentication: SMB, RDP, database greetings, SMTP STARTTLS, and curated UDP probes with honest `open|filtered` semantics
+- Targets/exclusions files, engagement manifests, resumable/sharded scans, JSONL streaming, and remote baseline/diff
+- Nuclei target export and a carefully allowlisted external runner that never enables code, headless, fuzz, brute-force, or denial-of-service templates
+- Persistent NVD cache/delta updates and CISA KEV enrichment with source freshness
+- More certificate, HTTP-header, cookie, SSH-algorithm, and TLS-posture observations without turning configuration absence into exploit claims
+
+## 0.4 policy workflows
 
 - Source-IP-aware firewall explanation
 - SARIF output for CI findings
@@ -34,9 +42,9 @@ The order matters: correctness and evidence quality come before more platforms o
 
 ## Explicitly not planned for v1
 
-- Remote network scanning
 - Packet capture
 - Process killing
 - Automatic firewall modification
 - Cloud dashboards or telemetry
 - AI-generated risk scores
+- Exploit execution, credential attacks, brute force, fuzzing, denial of service, stealth/evasion, or arbitrary remote template/code execution

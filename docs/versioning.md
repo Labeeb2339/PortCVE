@@ -7,6 +7,8 @@ Published schema documents use location-independent URNs:
 - `urn:portcve:schema:snapshot:v1`
 - `urn:portcve:schema:lock:v1`
 - `urn:portcve:schema:vulnerability:v1`
+- `urn:portcve:schema:remote:v1`
+- `urn:portcve:schema:import:v1`
 
 These identifiers do not imply that a `portcve.dev` website or schema host exists.
 

@@ -69,12 +69,32 @@ Seven live JSON variants and a hostile-environment rerun validated against the D
 
 The hostile environment set remote/suppressive `TRIVY_*` values. PortCVE removed them before setting its offline allowlist and still returned the full report. Docker event/inventory checks showed zero pulls and no image-inventory change. Per-invocation scanner temp directories and test containers were absent after completion.
 
+## Authorized remote path — 2026-08-09
+
+- Windows PowerShell `5.1.26100.8875`, Windows x64.
+- Two disposable listeners were bound only to `127.0.0.1` on OS-assigned high ports.
+- The SSH fixture returned `OpenSSH_9.6p1`; PortCVE reported OpenSSH `9.6p1`.
+- The silent HTTP fixture returned `Server: Apache/2.4.58` only after receiving a request.
+- Discovery sent zero HTTP requests and did not infer an identity for the silent unknown service.
+- `--active` opened a fresh connection, sent exactly `HEAD / HTTP/1.1`, and reported Apache HTTP Server `2.4.58` with evidence source `active-adaptive-http-head`.
+- No other HTTP method or path, external target, online-advisory request, credential, or exploit payload was used.
+- Default/private privacy checks, schema-compatible output, command timeouts, process cleanup, listener cleanup, and temporary-directory cleanup passed.
+
+The static PowerShell harness passed 29 checks. The reproducible live command is:
+
+```powershell
+.\scripts\Test-RemoteHostIntegration.ps1
+```
+
+Detailed behavior and the narrower adaptive-TLS limitation are recorded in [remote-live-validation.md](remote-live-validation.md).
+
 ## Claim boundary
 
-The evidence above supports the tested Windows collection, Docker tuple-correlation, Trivy adapter, parser, redaction, schema, cleanup, and exit-policy paths. It does not prove:
+The evidence above supports the tested Windows collection, Docker tuple-correlation, Trivy adapter, authorized loopback discovery/adaptive HTTP, parsers, redaction, schemas, cleanup, and exit-policy paths. It does not prove:
 
 - that a wildcard bind is reachable from a LAN or the Internet;
 - that a matched package is reachable, exploitable, or compromised;
 - that no unreported vulnerability exists;
 - that a zero-finding result is safe beyond the named database snapshot; or
+- authorization, behavior, or reachability for any untested remote target; or
 - compatibility with every Windows, Docker, Trivy, image, SBOM, or firewall configuration.

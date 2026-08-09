@@ -1,6 +1,6 @@
 # Architecture
 
-PortCVE is a collection-and-correlation CLI. It does not sniff packets and does not execute untrusted code.
+PortCVE is a collection-and-correlation CLI. It does not sniff packets, execute untrusted code, or run exploit payloads. Its remote path makes bounded TCP/application connections only after an authorization assertion.
 
 ## Pipeline
 
@@ -12,7 +12,10 @@ PortCVE is a collection-and-correlation CLI. It does not sniff packets and does 
 6. The optional firewall collector reads the merged `ActiveStore` through structured NetSecurity CIM objects and joins rule filters by stable rule ID.
 7. The evaluator separates exact matches from conditional or unsupported rules. Unresolved predicates lower confidence and can produce `mixed` or `unknown`.
 8. For `scan`, the vulnerability layer selects only immutable correlated Docker image IDs or an explicitly supplied local SBOM, invokes a separately installed Trivy process in offline mode, and records database freshness and provider completeness.
-9. Renderers emit human text, versioned JSON, JSONL events, normalized lockfiles, or vulnerability reports.
+9. For `scan-host`, the planner bounds target/port expansion, freezes DNS once, and runs TCP discovery plus protocol-specific greeting, HTTP, and TLS probes through a shared rate limiter.
+10. Strong protocol-banner product/version identities may enter the small verified CPE catalog. Explicit-online NVD requests preserve CVE applicability/configuration conditions; headers and port-number guesses never enter that path.
+11. Forward-only, cardinality-bounded Nmap XML and byte-streamed Nuclei JSONL importers normalize already-produced evidence without launching either external scanner or fetching templates/links. Normalization retains safe endpoint and finding identifiers while discarding raw NSE output, extracted values, requests, responses, curl commands, and template content.
+12. Renderers emit human text, versioned JSON, JSONL events, normalized lockfiles, vulnerability reports, remote reports, or import documents.
 
 Native socket collection and a bounded Docker named-pipe probe run for every live collection. If the pipe is absent, the Docker collector returns `unavailable` quickly and does not start Docker Desktop or any container. Windows Firewall collection is intentionally opt-in for inventory, lock, and watch because effective rule enumeration is much slower.
 
@@ -29,12 +32,23 @@ PortCVE labels evidence by source because the sources have different semantics:
 | Docker published-port metadata | Local Docker Engine `/version` and negotiated `/containers/json` over `\\.\pipe\docker_engine` | Runtime-declared mapping for a running container; correlated to a host socket by tuple with medium confidence, not proof that the container owns the Windows socket. |
 | Firewall profile/rules/filters | Local NetSecurity commands against `ActiveStore` | Static configuration evidence consumed by PortCVE's evaluator, not a live WFP packet-classification result. |
 | Package advisory matches | Separately installed Trivy, immutable local Docker image ID or explicit local SBOM, and pre-populated local database | Known-advisory match for an observed package version; not proof of reachability, exploitability, or compromise. |
+| Remote TCP/protocol evidence | Direct TCP connection, bounded greeting/HTTP response, or TLS handshake after `--authorized` | Observed network behavior at that time; not proof of every path, product installation, vulnerability, or exploitability. |
+| Remote CVE candidates | Strong banner identity, provenance-bound CPE catalog mapping, and explicit-online NVD CVE/configuration data | Candidate only. Compound cofactors stay conditional; insufficient or negated applicability stays inconclusive. |
+| Imported Nmap/Nuclei evidence | Existing local files supplied by the operator | External scanner claims retained with source/confidence; never promoted to verified PortCVE observations automatically. |
 
 The PowerShell scripts are bundled constants and do not interpolate CLI input. They run locally, but `--resolve-accounts` separately calls Windows account lookup APIs; Windows can contact domain services when a SID is not local or cached.
 
 ## Data boundaries
 
-The core model contains platform-neutral listeners, owners, interfaces, container publications, policy evidence, vulnerability subjects/findings/provider runs, diagnostics, and evidence status. Win32, Docker transport, and Trivy parser structures remain in their collection layers.
+The core model contains platform-neutral listeners, owners, interfaces, container publications, policy evidence, vulnerability subjects/findings/provider runs, remote observations/applicability, imported evidence, diagnostics, and evidence status. Win32, Docker transport, Trivy, remote protocol, NVD, Nmap, and Nuclei parser structures remain in their collection layers.
+
+## Authorized remote assessment
+
+The planner accepts one hostname/IP or IPv4 CIDR, rejects URL/path syntax, defaults to at most 256 expanded addresses, and requires `--authorized`. DNS names are resolved once and every later connection uses the frozen numeric set. A scanner instance owns one monotonic connection-rate limiter shared across all targets in the run; overall host and per-host concurrency stay within the CLI bound. Each frozen address/port set and each stored response has a hard cap.
+
+Discovery never depends on ICMP. TCP refusal, timeout, unreachable, error, and successful connection are different states; timeout is not relabeled `filtered`. Passive identification reads bounded greetings or issues `HEAD /` on configured HTTP ports and performs TLS/HTTPS negotiation on configured TLS ports. Safe-active mode adds only `OPTIONS`/`HEAD` requests and separate TLS version handshakes. A silent nonstandard port may receive a fresh adaptive `HEAD /` and then a TLS ClientHello; valid HTTP framing or a completed TLS handshake is required, and HTTPS requires HTTP/1.1 ALPN. Cross-host redirects are recorded as headers and never followed.
+
+Product extraction is protocol-bound. A strong product/version pattern in a protocol greeting may be submitted to the provenance-bearing catalog as `strong`; an HTTP `Server`/`X-Powered-By` self-report remains review-only. The NVD client is disabled unless explicitly requested, sends only the selected CPE, rate-limits requests process-wide, honors server cooldown, and never records the optional API key. A run queries at most 64 unique catalog-backed identities. Provider findings are normalized once in `advisory_results`; endpoint assessments reference them by `advisory_result_id`, preventing repeated services from multiplying full CVE/configuration payloads. Applicability trees, vulnerability status, source timestamps, and limitations are retained. Direct candidates, conditional candidates, and inconclusive records are separate output states; exploitability is always `not_assessed`.
 
 ## Offline vulnerability assessment
 
