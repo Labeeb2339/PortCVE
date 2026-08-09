@@ -1,3 +1,5 @@
+#requires -Version 7.2
+
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Path,
@@ -77,6 +79,9 @@ $metadata = [ordered]@{
         timestamp = [ordered]@{
             format = 'RFC3161'
             validated = $true
+            binding_verified = $true
+            binding_method = [string]$verification.TimestampBinding
+            timestamp_utc = [string]$verification.TimestampUtc
             subject = $timestampSigner.Subject
             issuer = $timestampSigner.Issuer
             serial_number = $timestampSigner.SerialNumber

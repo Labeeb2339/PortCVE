@@ -11,7 +11,8 @@ internal sealed record ProcessInvocation(
     int MaximumStandardOutputCharacters,
     int MaximumStandardErrorCharacters,
     IReadOnlyList<string>? EnvironmentVariablesToRemove = null,
-    IReadOnlyDictionary<string, string?>? EnvironmentVariablesToSet = null);
+    IReadOnlyDictionary<string, string?>? EnvironmentVariablesToSet = null,
+    IReadOnlyList<string>? EnvironmentVariablePrefixesToRemove = null);
 
 internal sealed record ProcessExecutionResult(
     bool Started,
@@ -32,6 +33,24 @@ internal interface IProcessRunner
 
 internal sealed class BoundedProcessRunner : IProcessRunner
 {
+    private static readonly TimeSpan DefaultPostKillGrace = TimeSpan.FromSeconds(2);
+    private readonly TimeSpan postKillGrace;
+
+    public BoundedProcessRunner()
+        : this(DefaultPostKillGrace)
+    {
+    }
+
+    internal BoundedProcessRunner(TimeSpan postKillGrace)
+    {
+        if (postKillGrace <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(postKillGrace));
+        }
+
+        this.postKillGrace = postKillGrace;
+    }
+
     public async Task<ProcessExecutionResult> RunAsync(
         ProcessInvocation invocation,
         CancellationToken cancellationToken)
@@ -90,7 +109,7 @@ internal sealed class BoundedProcessRunner : IProcessRunner
         catch (OutputLimitExceededException)
         {
             KillProcessTree(process);
-            await WaitAfterKillAsync(process);
+            await WaitAfterKillAsync(process, postKillGrace);
             return new(
                 true,
                 process.HasExited ? process.ExitCode : null,
@@ -102,7 +121,7 @@ internal sealed class BoundedProcessRunner : IProcessRunner
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             KillProcessTree(process);
-            await WaitAfterKillAsync(process);
+            await WaitAfterKillAsync(process, postKillGrace);
             return new(
                 true,
                 process.HasExited ? process.ExitCode : null,
@@ -114,7 +133,7 @@ internal sealed class BoundedProcessRunner : IProcessRunner
         catch (OperationCanceledException)
         {
             KillProcessTree(process);
-            await WaitAfterKillAsync(process);
+            await WaitAfterKillAsync(process, postKillGrace);
             throw;
         }
     }
@@ -135,18 +154,34 @@ internal sealed class BoundedProcessRunner : IProcessRunner
             startInfo.ArgumentList.Add(argument);
         }
 
+        ApplyEnvironmentPolicy(startInfo.Environment, invocation);
+        return startInfo;
+    }
+
+    internal static void ApplyEnvironmentPolicy(
+        IDictionary<string, string?> environment,
+        ProcessInvocation invocation)
+    {
         foreach (var name in invocation.EnvironmentVariablesToRemove ?? [])
         {
-            startInfo.Environment.Remove(name);
+            environment.Remove(name);
+        }
+
+        foreach (var prefix in invocation.EnvironmentVariablePrefixesToRemove ?? [])
+        {
+            foreach (var name in environment.Keys
+                .Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .ToArray())
+            {
+                environment.Remove(name);
+            }
         }
 
         foreach (var item in invocation.EnvironmentVariablesToSet
             ?? new Dictionary<string, string?>())
         {
-            startInfo.Environment[item.Key] = item.Value;
+            environment[item.Key] = item.Value;
         }
-
-        return startInfo;
     }
 
     private static async Task<string> ReadBoundedAsync(
@@ -190,15 +225,48 @@ internal sealed class BoundedProcessRunner : IProcessRunner
         }
     }
 
-    private static async Task WaitAfterKillAsync(Process process)
+    private static Task<bool> WaitAfterKillAsync(Process process, TimeSpan grace) =>
+        WaitWithGraceAsync(token => process.WaitForExitAsync(token), grace);
+
+    internal static async Task<bool> WaitWithGraceAsync(
+        Func<CancellationToken, Task> waitAsync,
+        TimeSpan grace)
     {
+        using var cancellation = new CancellationTokenSource();
+        Task waitTask;
         try
         {
-            await process.WaitForExitAsync(CancellationToken.None);
+            waitTask = waitAsync(cancellation.Token);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+
+        var delayTask = Task.Delay(grace);
+        if (await Task.WhenAny(waitTask, delayTask) != waitTask)
+        {
+            cancellation.Cancel();
+            _ = waitTask.ContinueWith(
+                static task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return false;
+        }
+
+        try
+        {
+            await waitTask;
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (InvalidOperationException)
         {
         }
+
+        return true;
     }
 
     private sealed class OutputLimitExceededException : Exception;

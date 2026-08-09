@@ -8,6 +8,8 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $installerPath = Join-Path $repositoryRoot 'scripts\install.ps1'
+$finalizerPath = Join-Path $repositoryRoot 'scripts\Finalize-ReleaseInstaller.ps1'
+$releaseWorkflowPath = Join-Path $repositoryRoot '.github\workflows\release.yml'
 $source = [IO.File]::ReadAllText($installerPath)
 $tokens = $null
 $parseErrors = $null
@@ -38,6 +40,7 @@ Assert-True ($placeholderMatches.Count -eq 1) 'Installer must contain exactly on
 $parameterNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
 Assert-True (($parameterNames -join ',') -ceq 'Version,InstallDirectory') 'Installer exposed an unexpected production parameter.'
 Assert-True ($source -notmatch '(?i)skip(signature|checksum)|allowunsigned|localassets?|testassets?') 'Installer contains a bypass or local-asset surface.'
+Assert-True ($source -notmatch '(?i)Rfc3161|1\.3\.6\.1\.4\.1\.311\.3\.3\.1') 'PowerShell 5.1 installer contains an unsupported independent RFC 3161 claim or OID-only check.'
 
 $forbiddenCommands = @('cmd', 'cmd.exe', 'curl', 'curl.exe', 'Invoke-Expression', 'Start-Process')
 $commands = @($ast.FindAll({
@@ -53,6 +56,17 @@ $markerIndex = $source.IndexOf($entrypointMarker, [StringComparison]::Ordinal)
 Assert-True ($markerIndex -gt 0) 'Installer entrypoint marker is missing.'
 $librarySource = $source.Substring(0, $markerIndex)
 Invoke-Expression $librarySource
+
+$workflowSource = [IO.File]::ReadAllText($releaseWorkflowPath)
+$workflowPatternMatch = [regex]::Match($workflowSource, "(?m)^\s+\`$pattern = '(?<pattern>[^']+)'\s*$")
+Assert-True $workflowPatternMatch.Success 'Release workflow tag pattern was not found.'
+Assert-True ([StringComparer]::Ordinal.Equals($workflowPatternMatch.Groups['pattern'].Value, $script:ReleaseTagPattern)) 'Workflow and installer release-tag patterns diverged.'
+foreach ($acceptedTag in @('v1.0.0', 'v1.0.0-rc.1', 'v2.3.4-1rc.2')) {
+    Assert-True ([regex]::IsMatch($acceptedTag, $script:ReleaseTagPattern)) "Compatible release tag '$acceptedTag' was rejected."
+}
+foreach ($rejectedTag in @('1.0.0', 'v01.0.0', 'v1.0.0-01', 'v1.0.0--rc', 'v1.0.0+build.1')) {
+    Assert-True (-not [regex]::IsMatch($rejectedTag, $script:ReleaseTagPattern)) "Out-of-policy release tag '$rejectedTag' was accepted."
+}
 
 $testParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
     [IO.Path]::DirectorySeparatorChar,
@@ -111,7 +125,32 @@ try {
     Invoke-AtomicInstall -InstallPath $installPath -StagingPath $staging -Token $token -OriginalUserPath 'unchanged' -UpdatedUserPath 'unchanged'
     Assert-True (([IO.File]::ReadAllText((Join-Path $installPath 'portcve.exe'))) -ceq 'new') 'Atomic replacement did not install staged bytes.'
 
-    Assert-True (-not (Test-Rfc3161Timestamp -Path (Join-Path $installPath 'portcve.exe') -ExpectedSignerSubject 'CN=Fixture')) 'Unsigned fixture was accepted as RFC 3161 timestamped.'
+    $unicodeSubject = "CN=Jos$([char]0x00e9) O'Brien, O=PortCVE"
+    $finalizedPath = Join-Path $testRoot 'finalized\install.ps1'
+    $null = & $finalizerPath -TemplatePath $installerPath -OutputPath $finalizedPath -ExpectedSignerSubject $unicodeSubject
+    $finalizedBytes = [IO.File]::ReadAllBytes($finalizedPath)
+    Assert-True ($finalizedBytes.Length -ge 3 -and $finalizedBytes[0] -eq 0xef -and $finalizedBytes[1] -eq 0xbb -and $finalizedBytes[2] -eq 0xbf) 'Finalized installer is not UTF-8 with BOM.'
+
+    # This harness runs under Windows PowerShell 5.1. ParseFile therefore proves
+    # the BOM preserves a non-ASCII subject for the supported legacy host.
+    $finalizedTokens = $null
+    $finalizedErrors = $null
+    $finalizedAst = [Management.Automation.Language.Parser]::ParseFile($finalizedPath, [ref]$finalizedTokens, [ref]$finalizedErrors)
+    Assert-True ($finalizedErrors.Count -eq 0) 'PowerShell 5.1 could not parse the BOM-finalized installer.'
+    $subjectAssignments = @($finalizedAst.FindAll({
+                param($node)
+                $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+                    [StringComparer]::Ordinal.Equals($node.Left.Extent.Text, '$script:ExpectedSignerSubject')
+            }, $true))
+    $subjectPreserved = $subjectAssignments.Count -eq 1 -and
+        $subjectAssignments[0].Right -is [Management.Automation.Language.CommandExpressionAst] -and
+        $subjectAssignments[0].Right.Expression -is [Management.Automation.Language.StringConstantExpressionAst] -and
+        [StringComparer]::Ordinal.Equals([string]$subjectAssignments[0].Right.Expression.Value, $unicodeSubject)
+    Assert-True $subjectPreserved 'PowerShell 5.1 did not preserve the exact non-ASCII signer subject.'
+
+    $forbiddenInstallPath = Join-Path $testRoot 'must-not-exist'
+    Assert-Throws { & $finalizedPath -Version 'v1.0.0' -InstallDirectory $forbiddenInstallPath } 'Unsigned finalized installer was accepted.'
+    Assert-True (-not (Test-Path -LiteralPath $forbiddenInstallPath)) 'Unsigned installer mutated the install target before rejecting its own signature.'
 }
 finally {
     $resolved = [IO.Path]::GetFullPath($testRoot)

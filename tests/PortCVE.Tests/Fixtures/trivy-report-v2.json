@@ -27,12 +27,6 @@
           "FixedVersion": "",
           "Severity": "HIGH",
           "References": []
-        },
-        {
-          "VulnerabilityID": "CVE-2026-INCOMPLETE",
-          "PkgName": "",
-          "InstalledVersion": "1",
-          "Severity": "HIGH"
         }
       ]
     }

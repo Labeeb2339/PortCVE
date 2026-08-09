@@ -14,14 +14,23 @@ public sealed class CliApplication
     private readonly ISnapshotBuilder snapshotBuilder;
     private readonly LockfileService lockfileService;
     private readonly IVulnerabilityScanner vulnerabilityScanner;
+    private readonly Func<string, LocalPathValidation> sbomPathValidator;
 
     public CliApplication()
-        : this(new SnapshotBuilder(), new LockfileService(), new TrivyVulnerabilityScanner())
+        : this(
+            new SnapshotBuilder(),
+            new LockfileService(),
+            new TrivyVulnerabilityScanner(),
+            LocalPathPolicy.ValidateExistingLocalFile)
     {
     }
 
     internal CliApplication(ISnapshotBuilder snapshotBuilder, LockfileService lockfileService)
-        : this(snapshotBuilder, lockfileService, new TrivyVulnerabilityScanner())
+        : this(
+            snapshotBuilder,
+            lockfileService,
+            new TrivyVulnerabilityScanner(),
+            LocalPathPolicy.ValidateExistingLocalFile)
     {
     }
 
@@ -29,10 +38,24 @@ public sealed class CliApplication
         ISnapshotBuilder snapshotBuilder,
         LockfileService lockfileService,
         IVulnerabilityScanner vulnerabilityScanner)
+        : this(
+            snapshotBuilder,
+            lockfileService,
+            vulnerabilityScanner,
+            LocalPathPolicy.ValidateExistingLocalFile)
+    {
+    }
+
+    internal CliApplication(
+        ISnapshotBuilder snapshotBuilder,
+        LockfileService lockfileService,
+        IVulnerabilityScanner vulnerabilityScanner,
+        Func<string, LocalPathValidation> sbomPathValidator)
     {
         this.snapshotBuilder = snapshotBuilder;
         this.lockfileService = lockfileService;
         this.vulnerabilityScanner = vulnerabilityScanner;
+        this.sbomPathValidator = sbomPathValidator;
     }
 
     public async Task<int> RunAsync(
@@ -65,21 +88,14 @@ public sealed class CliApplication
         string? sbomPath = null;
         if (options.SbomPath is not null)
         {
-            try
+            var validation = sbomPathValidator(options.SbomPath);
+            if (!validation.IsValid)
             {
-                sbomPath = Path.GetFullPath(options.SbomPath);
-            }
-            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
-            {
-                error.WriteLine($"error: invalid SBOM path: {exception.Message}");
+                error.WriteLine($"error: {validation.Code}: {validation.Message}");
                 return ExitCodes.UsageOrSchema;
             }
 
-            if (!File.Exists(sbomPath))
-            {
-                error.WriteLine($"error: SBOM file not found: '{sbomPath}'.");
-                return ExitCodes.UsageOrSchema;
-            }
+            sbomPath = validation.FullPath;
         }
 
         var snapshot = await snapshotBuilder.CollectAsync(

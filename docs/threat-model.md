@@ -56,9 +56,11 @@ Lockfiles are user-provided data. Their schema is validated before comparison, b
 - Watch does not report removals from a failed endpoint snapshot.
 - V1 never kills a process, closes a socket, changes a firewall rule, or sends a probe.
 - Vulnerability subjects are limited to exact immutable Docker image IDs and explicitly supplied SBOMs. Unresolved native processes are `not_supported`, never silently clean.
-- Trivy is launched directly with an argument list, bounded time and output, process-tree termination on cancellation or limits, and offline/update/telemetry flags. PortCVE does not invoke a shell or fall back from the local Docker image source to a registry.
+- Trivy is launched directly with an argument list, bounded time and output, process-tree termination on cancellation or limits, and offline/update/telemetry flags. Post-kill waiting also has a fixed grace period, so failed termination cannot hang PortCVE indefinitely. PortCVE does not invoke a shell or fall back from the local Docker image source to a registry.
+- Every inherited `TRIVY_*` variable is removed case-insensitively before PortCVE sets its small offline allowlist. Each scan gets a validated local temp directory through `TMP` and `TEMP`; cleanup is limited to the exact generated child and runs for success, failure, timeout, output overflow, or cancellation.
+- The Trivy executable is an explicit user trust boundary: PortCVE executes `PORTCVE_TRIVY_PATH`, or `trivy.exe` as resolved by the caller's `PATH`. Operators must provide a trusted local executable and must not point either setting at a UNC path or reparse point; the offline flags cannot make an untrusted executable safe.
 - Missing or invalid database metadata is `unavailable`. A database older than 72 hours is `partial`; `--strict` returns exit code `3`.
-- SBOMs are hashed before and after scanning. If the file changes, PortCVE discards its findings and reports partial evidence.
+- SBOMs must be local regular files. UNC paths, mapped network drives, and reparse-point traversal are rejected before collection. Files are hashed before and after scanning; changed input findings are discarded and the scan cannot become successful partial evidence.
 - A zero-match result is qualified by database date and completeness. A finding is a package/advisory match, not proof of exploitability or reachability.
 
 ## Privacy modes

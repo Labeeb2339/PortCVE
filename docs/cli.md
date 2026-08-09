@@ -29,12 +29,12 @@ Every live collection also performs a bounded probe of the local Docker Engine n
 
 `scan` maps selected TCP listeners only to immutable Docker `sha256:` image IDs. Native Windows process names and paths are not guessed into products or CPEs. For one exact TCP port, `--sbom <path>` adds an explicitly declared local SBOM subject; it cannot be combined with `--all`.
 
-The scanner launches a separately installed Trivy executable without a shell, selects the local Docker daemon only, and supplies update, telemetry, version-check, VEX-update, and online dependency-resolution disable flags. It never downloads Trivy or a database. Set `PORTCVE_TRIVY_PATH` for a non-default executable and `PORTCVE_TRIVY_CACHE_DIR` for a non-default cache. The expected database metadata is `<cache>\db\metadata.json`; a missing or invalid database makes the subject unavailable, while a database older than 72 hours makes evidence partial.
+The scanner launches a separately installed Trivy executable without a shell, selects the local Docker daemon only, and supplies update, telemetry, version-check, VEX-update, and online dependency-resolution disable flags. It never downloads Trivy or a database. Set `PORTCVE_TRIVY_PATH` for a trusted local non-default executable and `PORTCVE_TRIVY_CACHE_DIR` for a non-default cache. The executable path (or the caller's `PATH` lookup when unset) is an explicit trust boundary and must not resolve through UNC storage or a reparse point. The cache, its database directory, metadata, and database file must resolve on an allowed local drive without reparse traversal before Trivy starts. The expected database metadata is `<cache>\db\metadata.json`; a missing or invalid database makes the subject unavailable, while a database older than 72 hours makes evidence partial.
 
 | Option | Behavior |
 | --- | --- |
 | `--all` | Select every observed TCP listener and deduplicate exact Docker subjects by immutable image ID. |
-| `--sbom <path>` | Add one explicit SBOM subject to an exact-port scan. The file is hashed before and after scanning; changed input findings are discarded. |
+| `--sbom <path>` | Add one explicit SBOM subject to an exact-port scan. UNC paths, mapped network drives, and paths traversing reparse points are rejected before collection. The file is hashed before and after scanning; changed input findings are discarded and cannot produce a successful scan. |
 | `--fail-on high` | Exit `1` for a high or critical known-advisory match. |
 | `--fail-on critical` | Exit `1` for a critical known-advisory match. |
 | `--strict` | Exit `3` if any selected subject is unsupported, unavailable, failed, or partial. |

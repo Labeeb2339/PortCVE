@@ -1,6 +1,6 @@
 # PortCVE release signing
 
-PortCVE's public Windows releases are fail-closed: the release workflow cannot publish an unsigned executable. A candidate is built and tested without signing credentials, approved through the protected `release-signing` environment, signed by SSL.com eSigner, independently verified, packaged, checksummed, attested, uploaded as a draft, and published only after GitHub reports matching SHA-256 asset digests.
+PortCVE's public Windows releases are fail-closed: the release workflow cannot publish an unsigned executable or production installer. A candidate is built and tested without signing credentials, the installer is finalized as UTF-8 with BOM, both files are approved through the protected `release-signing` environment and signed by SSL.com eSigner, independently verified, packaged, checksummed, attested, uploaded as a draft, and published only after GitHub reports matching SHA-256 asset digests.
 
 This document is an operator runbook, not evidence that the current repository or certificate account is already configured. Repository settings and SSL.com identity validation must be completed by a maintainer before the first signed release.
 
@@ -47,17 +47,19 @@ GitHub should also limit the `release-signing` environment's deployment tag patt
 The workflow in `.github/workflows/release.yml` has three security boundaries:
 
 - `build` has read-only repository access and no signing secrets. It restores locked dependencies, checks formatting, builds, tests, publishes exactly one unsigned `portcve.exe`, and smoke-tests it.
-- `sign` runs only after approval in `release-signing`. It fails if any secret or the expected full signer subject is missing. It verifies the exact SHA-256 of SSL.com CodeSignTool 1.3.0 before the pinned SSL.com action signs only `portcve.exe`.
-- `package_publish` has the release and attestation permissions. It downloads only the verified signed artifact, repeats signature verification, creates the ZIP and installer, writes a checksum for every public asset other than the checksum file itself, generates GitHub provenance attestations, creates a draft, checks GitHub's recorded asset digests, and only then publishes it.
+- `sign` runs only after approval in `release-signing`. It fails if any secret or the expected full signer subject is missing. It finalizes `install.ps1` with a UTF-8 BOM, verifies the exact SHA-256 of SSL.com CodeSignTool 1.3.0, and invokes the pinned SSL.com action separately for the exact `portcve.exe` and `install.ps1` paths.
+- `package_publish` has the release and attestation permissions. It downloads only the two verified signed files, repeats signature verification, creates the ZIP, writes a checksum for every public asset other than the checksum file itself, generates GitHub provenance attestations, creates a draft, checks GitHub's recorded asset digests, and only then publishes it.
 
 Signature verification requires all of the following:
 
-- `signtool verify /pa /all /v` succeeds with exactly one SHA-256 signature, one validated timestamp, zero warnings, and zero errors;
+- for `portcve.exe`, `signtool verify /pa /all /v` succeeds with exactly one SHA-256 signature, one validated timestamp, zero warnings, and zero errors;
 - `Get-AuthenticodeSignature` reports `Valid`;
 - the signer's full subject is an ordinal, exact match for `EXPECTED_SIGNER_SUBJECT`;
 - the signer certificate contains Code Signing EKU `1.3.6.1.5.5.7.3.3`;
-- a timestamp certificate is present; and
-- the PE's PKCS#7 signature contains the RFC 3161 timestamp-token OID rather than only a legacy countersignature.
+- a timestamp certificate containing Time Stamping EKU `1.3.6.1.5.5.7.3.8` is present; and
+- under PowerShell 7.2 or newer, the PE certificate table or PowerShell signature block contains exactly one RFC 3161 token, with no legacy countersignature; `Rfc3161TimestampToken.TryDecode` consumes the complete token, `VerifySignatureForSignerInfo` cryptographically binds its message imprint to the primary Authenticode `SignerInfo`, and the returned TSA certificate exactly matches the Windows-trusted timestamp certificate.
+
+The release verifier fails if the PowerShell 7 platform primitive is unavailable, or if a token is malformed, has trailing data, is unbound, has an invalid signature, uses a different TSA certificate, is duplicated, or is accompanied by a legacy countersignature. Windows PowerShell 5.1 cannot access this .NET primitive. The production installer therefore makes the narrower claim that Windows reports the Authenticode signature and timestamp as trusted and that both required EKUs are present; it does not perform or claim an independent RFC 3161 binding proof.
 
 There is no unsigned fallback. Missing credentials, a changed action/tool download, unexpected files, a wrong subject, a missing timestamp, a failed smoke test, a checksum mismatch, failed provenance, or a release API error stops publication.
 
@@ -81,11 +83,11 @@ There is no unsigned fallback. Missing credentials, a changed action/tool downlo
 6. Confirm the workflow's signature verification, signed smoke test, metadata validation, provenance attestation, draft digest verification, and final publish steps all passed.
 7. Download the published assets on a separate Windows machine and run the consumer checks below.
 
-Stable tags such as `v1.0.0` publish as the latest stable release. Valid prerelease tags such as `v1.0.0-rc.1` publish as prereleases. Build metadata such as `+build.5` is intentionally rejected.
+Stable tags such as `v1.0.0` publish as the latest stable release. Policy-compatible prerelease tags such as `v1.0.0-rc.1` publish as prereleases. Numeric identifiers with leading zeroes, prerelease identifiers beginning with a hyphen, and build metadata such as `+build.5` are intentionally rejected by the same rule in the workflow and installer.
 
 ## Consumer verification
 
-From a clean directory containing the release assets:
+From a clean checkout of the exact release tag, with the downloaded release assets placed at the repository root:
 
 ```powershell
 $expected = (Get-Content -LiteralPath .\SHA256SUMS.txt | ForEach-Object {
@@ -97,8 +99,12 @@ foreach ($entry in $expected) {
     if ($actual -cne $entry.Hash) { throw "Checksum mismatch: $($entry.Name)" }
 }
 
-.\scripts\Verify-ReleaseSignature.ps1 `
+pwsh -NoProfile -File .\scripts\Verify-ReleaseSignature.ps1 `
     -Path .\portcve.exe `
+    -ExpectedSignerSubject 'PASTE THE EXACT PUBLISHED FULL X.500 SUBJECT'
+
+pwsh -NoProfile -File .\scripts\Verify-ReleaseSignature.ps1 `
+    -Path .\install.ps1 `
     -ExpectedSignerSubject 'PASTE THE EXACT PUBLISHED FULL X.500 SUBJECT'
 ```
 
@@ -118,7 +124,8 @@ Do not call a build `1.0.0` until every item is evidenced:
 - `release-signing` has required reviewers, self-review prevention, and release-tag restrictions.
 - `main` and `v*` tags are protected, immutable releases are enabled, and action SHA pinning is enforced where available.
 - A prerelease completed the entire production signing workflow without manual artifact substitution.
-- Both verification engines accepted the downloaded release executable, including SHA-256, Code Signing EKU, and RFC 3161 timestamp checks.
+- The PowerShell 7 release verifier accepted both downloaded signed files with the exact subject, Code Signing and Time Stamping EKUs, and a `VerifySignatureForSignerInfo` RFC 3161 binding proof; SignTool also accepted the executable's SHA-256 signature.
+- Windows PowerShell 5.1 parsed the finalized UTF-8 BOM installer with the exact non-ASCII test subject, and the installer rejected unsigned or in-memory execution before network or install-directory mutation.
 - `portcve.exe --version` and a no-firewall snapshot smoke test passed after signing and after download.
 - Every file in `SHA256SUMS.txt` matched, the installer rejected a tampered ZIP/executable, and GitHub provenance verification passed.
 - The ZIP contains the same signed executable hash recorded in `SIGNING-METADATA.json`.

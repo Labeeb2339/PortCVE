@@ -1,18 +1,19 @@
 # PortCVE
 
-**Explain local ports. Lock the ones you expect.**
+**Explain local ports. Check what backs them. Lock what you expect.**
 
 PortCVE is a read-only Windows CLI that connects the facts other port tools leave separate:
 
 - which TCP listeners and UDP endpoints exist;
 - which process or Windows service owns each bind;
 - which local Docker Engine publication maps a container port to that observed host bind;
+- which known vulnerability advisories match packages in an exactly identified local Docker image or explicitly supplied SBOM;
 - whether the bind is loopback-only, interface-specific, or wildcard;
 - which active interfaces and network profiles it covers;
 - what a static evaluation of the merged Windows Firewall policy suggests; and
 - whether that local attack surface changed since a trusted baseline.
 
-PortCVE does not call a wildcard bind “Internet exposed.” It reports observed host facts, host-policy inference, confidence, and limitations separately.
+PortCVE does not call a wildcard bind “Internet exposed” or an advisory match “exploitable.” It reports observed host facts, known-advisory evidence, confidence, and limitations separately.
 
 > Status: `0.1.0-alpha.1`. Windows x64 is the only supported release target today. The CLI and JSON schemas can still change before `1.0`.
 >
@@ -22,7 +23,7 @@ PortCVE does not call a wildcard bind “Internet exposed.” It reports observe
 
 `netstat`, TCPView, and PowerShell can show sockets and owners. PortCVE is for the next question:
 
-> What opened this port, where can it receive traffic, what does the host firewall say, and is this new?
+> What opened this port, where can it receive traffic, what does the host firewall say, do its exact packages match known advisories, and is this new?
 
 It is designed for developers, defenders, incident responders, lab machines, and Windows hardening checks—not remote scanning.
 
@@ -82,19 +83,19 @@ The script is intentionally mutating: it may pull `alpine:3.22`, creates and rem
 
 The reachability wording is intentional. `STATIC ALLOW` and `STATIC BLOCK` summarize a static assessment of Windows Firewall configuration; they are not results from the Windows Filtering Platform packet-classification path. A local socket table and firewall rules cannot prove what a third-party WFP filter, IPsec negotiation, router, cloud security group, VPN, or remote host will do.
 
+### Live vulnerability validation
+
+The offline scan path was exercised on 2026-08-09 with official Trivy `v0.73.0`, an isolated schema-2 database, and the immutable local Docker image ID `sha256:c4d56c24da4f009ecf8352146b43497fe78953edb4c679b841732beb97e588b0` (Alpine 3.22.1). PortCVE reported 87 known-advisory matches: 3 critical, 17 high, 26 medium, and 41 low. A fresh strict scan returned `0`; `--fail-on high` and `--fail-on critical` returned `1`; missing and 96-hour-stale databases returned `3` without converting incomplete evidence into a clean result.
+
+The same run validated default/private redaction, Draft 2020-12 schema conformance, hostile inherited `TRIVY_*` scrubbing, zero image pulls, and per-scan temp cleanup. These results prove the tested local correlation, parsing, policy, and exit-code paths—not that every finding is reachable or exploitable. Exact hashes, representative findings, and claim boundaries are recorded in [docs/validation.md](docs/validation.md).
+
 ## Install
 
 ### Signed installer
 
-For finalized signed releases, the recommended route is to download, checksum, inspect, and run the release's `install.ps1`. It uses PowerShell 5.1+, installs without administrator rights to `%LOCALAPPDATA%\Programs\PortCVE`, verifies the versioned ZIP and the signed executable, and updates the user `PATH` with rollback protection. See the complete [installer instructions and trust checks](docs/install.md).
+For finalized signed releases, download, checksum, Authenticode-verify, inspect, and run the release's file-backed `install.ps1`. It refuses piped or in-memory execution, verifies its own signer before network or filesystem activity, installs without administrator rights to `%LOCALAPPDATA%\Programs\PortCVE`, verifies the versioned ZIP and signed executable, and updates the user `PATH` with rollback protection. See the complete [installer instructions and trust checks](docs/install.md).
 
-Quick latest-release command:
-
-```powershell
-irm https://github.com/Labeeb2339/PortCVE/releases/latest/download/install.ps1 | iex
-```
-
-> Security warning: piping `irm` to `iex` executes remote text without giving you a chance to inspect or independently checksum the installer. Prefer the documented `curl.exe` download-then-verify flow. The checked-in `scripts/install.ps1` is an unfinalized template and deliberately refuses to run; use the installer asset from a signed release.
+The checked-in `scripts/install.ps1` is an unsigned, unfinalized template and deliberately refuses to run. Production installation requires the separately downloaded and signed release asset; pipe-to-execution installation is refused.
 
 The installer never permits an unsigned production install. The historical `v0.1.0-alpha.1` release is unsigned and is intentionally rejected.
 
@@ -124,6 +125,8 @@ portcve tcp:8080 --evidence          # protocol-specific deep explanation
 portcve list --scope non-loopback    # filter likely remote-facing binds
 portcve list --process node.exe      # filter by process or service
 portcve snapshot --json              # full versioned evidence document
+portcve scan tcp:8080 --strict        # offline advisory matches for one exact listener
+portcve scan --all --fail-on high     # deduplicated Docker-image scan and CI gate
 portcve lock -o listeners.lock.json  # normalized baseline, no PID or raw args
 portcve lock --include-udp            # opt into noisier UDP baseline tracking
 portcve diff listeners.lock.json     # report all current drift
@@ -169,12 +172,13 @@ Container evidence has its own completeness field. If the local Docker Engine re
 
 ## Evidence model
 
-PortCVE keeps four layers separate:
+PortCVE keeps five layers separate:
 
 1. **Observed bind:** address, port, protocol, owning PID, executable/service, and bind scope.
 2. **Local runtime correlation:** Docker Engine published-port metadata joined to an observed bind by protocol, host address, and host port, always with medium confidence and a tuple-correlation limitation.
 3. **Static host-policy inference:** merged Windows Firewall profiles and matching inbound-rule evidence, with `allow`, `block`, `mixed`, or `unknown` plus confidence and limitations.
-4. **External path:** always `not tested` in the current release.
+4. **Known-advisory match:** Trivy results for an immutable local Docker image ID or explicit local SBOM, with database identity/freshness and no exploitability claim.
+5. **External path:** always `not tested` in the current release.
 
 `UNKNOWN` is a valid result. Missing permissions, unsupported firewall constraints, process churn, WSL, third-party WFP filters, IPsec, and upstream network controls are not converted into false certainty. A Docker publication with no matching Windows endpoint remains a diagnostic and never becomes a synthetic listener.
 
@@ -196,8 +200,8 @@ The native socket row is direct point-in-time evidence from the host, although c
 The default contract is deliberately small:
 
 - read-only—no process killing or firewall changes;
-- local/offline by default—collection uses local OS APIs and, when available, the local Docker Engine named pipe; it performs no telemetry, DNS resolution, reputation lookup, image pull, or sample upload;
-- no process environment-variable reads;
+- local/offline by default—collection uses local OS APIs and, when available, the local Docker Engine named pipe; vulnerability scans use a separately installed Trivy executable and pre-populated local database with online/update/telemetry paths disabled; PortCVE performs no reputation lookup, image pull, or sample upload;
+- no target-process environment-variable reads;
 - no command-line collection;
 - no remote scan or external reachability probe; and
 - diagnostics go to stderr so JSON stdout remains machine-readable.
@@ -212,10 +216,11 @@ For Docker correlations, default JSON replaces container IDs, container names, a
 
 ## Machine-readable output
 
-All JSON uses snake_case, stable enum strings, a mandatory `schema_version`, deterministic listener ordering, and diagnostics for partial collectors. Schema identifiers are stable URNs (`urn:portcve:schema:snapshot:v1` and `urn:portcve:schema:lock:v1`); they do not depend on a project website.
+All JSON uses snake_case, stable enum strings, a mandatory `schema_version`, deterministic ordering, and diagnostics for partial evidence. Schema identifiers are stable URNs; they do not depend on a project website.
 
 - [Snapshot schema v1](schema/portcve.snapshot.v1.schema.json)
 - [Lockfile schema v1](schema/portcve.lock.v1.schema.json)
+- [Vulnerability report schema v1](schema/portcve.vulnerability.v1.schema.json)
 
 Human-readable output is not a compatibility API. JSON and lockfile schema changes follow the policy in [docs/versioning.md](docs/versioning.md).
 
@@ -228,8 +233,9 @@ Included now:
 - loopback/interface/wildcard classification;
 - active Windows network-profile mapping;
 - local Docker Engine named-pipe collection and medium-confidence published-port correlation;
+- offline known-advisory matching for immutable local Docker image IDs and explicit local SBOMs, with database freshness and CI exit gates;
 - opt-in static Windows Firewall correlation;
-- list, inspect, snapshot, lock, diff, check, watch, and doctor workflows;
+- list, inspect, scan, snapshot, lock, diff, check, watch, and doctor workflows;
 - text, JSON, and JSONL output; and
 - standard-user degradation with explicit diagnostics.
 
@@ -240,6 +246,7 @@ Not included:
 - process termination or automatic firewall changes;
 - a generic “risk score”;
 - proof of LAN or Internet reachability;
+- exploitability proof, automatic remediation, automatic database downloads, or guessed CPEs from process/port names;
 - WSL guest-process or Kubernetes workload attribution; or
 - Linux support yet.
 

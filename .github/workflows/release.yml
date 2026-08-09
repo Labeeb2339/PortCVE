@@ -38,9 +38,9 @@ jobs:
           Set-StrictMode -Version Latest
 
           $tag = $env:RELEASE_TAG
-          $pattern = '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*))*))?$'
+          $pattern = '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|(?=[0-9A-Za-z-]*[A-Za-z-])[0-9A-Za-z][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|(?=[0-9A-Za-z-]*[A-Za-z-])[0-9A-Za-z][0-9A-Za-z-]*))*))?$'
           if (-not [regex]::IsMatch($tag, $pattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
-            throw "Release tag '$tag' is not an exact SemVer tag (vMAJOR.MINOR.PATCH[-PRERELEASE]); build metadata is not accepted."
+            throw "Release tag '$tag' is not policy-compatible SemVer (vMAJOR.MINOR.PATCH[-PRERELEASE]); prerelease identifiers must begin with an alphanumeric character and build metadata is not accepted."
           }
 
           $tagObjectType = (git cat-file -t "refs/tags/$tag").Trim()
@@ -185,6 +185,27 @@ jobs:
             throw 'The signing input is not the unsigned candidate produced by the build job.'
           }
 
+      - name: Finalize UTF-8 BOM installer for signing
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          ./scripts/Finalize-ReleaseInstaller.ps1 `
+            -TemplatePath scripts/install.ps1 `
+            -OutputPath artifacts/unsigned-installer/install.ps1 `
+            -ExpectedSignerSubject $env:EXPECTED_SIGNER_SUBJECT
+
+          $installerPath = (Resolve-Path -LiteralPath artifacts/unsigned-installer/install.ps1).Path
+          $bytes = [IO.File]::ReadAllBytes($installerPath)
+          if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xef -or $bytes[1] -ne 0xbb -or $bytes[2] -ne 0xbf) {
+            throw 'Finalized installer lost its required UTF-8 BOM.'
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $installerPath
+          if ($signature.Status -ne [Management.Automation.SignatureStatus]::NotSigned -or $null -ne $signature.SignerCertificate) {
+            throw 'Finalized installer must be unsigned before entering the protected signing action.'
+          }
+
       - name: Set up Java for SSL.com CodeSignTool
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.0.0
         with:
@@ -219,7 +240,7 @@ jobs:
           "CODESIGNTOOL_PATH=$toolRoot" >> $env:GITHUB_ENV
           'JAVA_VERSION=21' >> $env:GITHUB_ENV
 
-      - name: Sign only portcve.exe with SSL.com eSigner
+      - name: Sign portcve.exe with SSL.com eSigner
         uses: SSLcom/esigner-codesign@b7f8ff36fc0de8690fbbab8e5b4421d29802f747 # reviewed 2025-06-23 commit; action 1.3.2
         with:
           command: sign
@@ -237,6 +258,24 @@ jobs:
           jvm_max_memory: 1024M
           signing_method: v2
 
+      - name: Sign finalized install.ps1 with SSL.com eSigner
+        uses: SSLcom/esigner-codesign@b7f8ff36fc0de8690fbbab8e5b4421d29802f747 # reviewed 2025-06-23 commit; action 1.3.2
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          program_name: PortCVE Installer
+          file_path: ${{ github.workspace }}\artifacts\unsigned-installer\install.ps1
+          output_path: ${{ github.workspace }}\artifacts\signed
+          malware_block: true
+          override: false
+          clean_logs: true
+          environment_name: PROD
+          jvm_max_memory: 1024M
+          signing_method: v2
+
       - name: Independently verify signed output
         shell: pwsh
         run: |
@@ -244,10 +283,35 @@ jobs:
           Set-StrictMode -Version Latest
 
           $files = @(Get-ChildItem -LiteralPath artifacts/signed -Recurse -File)
-          if ($files.Count -ne 1 -or -not [StringComparer]::Ordinal.Equals($files[0].Name, 'portcve.exe')) {
-            throw "Signing output must contain only portcve.exe; found: $($files.FullName -join ', ')."
+          $expectedNames = @('install.ps1', 'portcve.exe')
+          if ($files.Count -ne $expectedNames.Count -or (Compare-Object @($files.Name | Sort-Object) @($expectedNames | Sort-Object))) {
+            throw "Signing output must contain only install.ps1 and portcve.exe; found: $($files.FullName -join ', ')."
           }
-          ./scripts/Verify-ReleaseSignature.ps1 -Path $files[0].FullName -ExpectedSignerSubject $env:EXPECTED_SIGNER_SUBJECT
+          ./scripts/Verify-ReleaseSignature.ps1 -Path artifacts/signed/portcve.exe -ExpectedSignerSubject $env:EXPECTED_SIGNER_SUBJECT
+          ./scripts/Verify-ReleaseSignature.ps1 -Path artifacts/signed/install.ps1 -ExpectedSignerSubject $env:EXPECTED_SIGNER_SUBJECT
+
+          $installerBytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath artifacts/signed/install.ps1))
+          if ($installerBytes.Length -lt 3 -or $installerBytes[0] -ne 0xef -or $installerBytes[1] -ne 0xbb -or $installerBytes[2] -ne 0xbf) {
+            throw 'Signed installer lost its required UTF-8 BOM.'
+          }
+          $tokens = $null
+          $parseErrors = $null
+          $installerAst = [Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path -LiteralPath artifacts/signed/install.ps1).Path,
+            [ref]$tokens,
+            [ref]$parseErrors
+          )
+          $subjectAssignments = @($installerAst.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+              [StringComparer]::Ordinal.Equals($node.Left.Extent.Text, '$script:ExpectedSignerSubject')
+          }, $true))
+          if ($parseErrors.Count -ne 0 -or $subjectAssignments.Count -ne 1 -or
+              $subjectAssignments[0].Right -isnot [Management.Automation.Language.CommandExpressionAst] -or
+              $subjectAssignments[0].Right.Expression -isnot [Management.Automation.Language.StringConstantExpressionAst] -or
+              -not [StringComparer]::Ordinal.Equals([string]$subjectAssignments[0].Right.Expression.Value, $env:EXPECTED_SIGNER_SUBJECT)) {
+            throw 'Signed installer does not contain the exact release signer subject.'
+          }
 
       - name: Smoke test signed executable
         shell: pwsh
@@ -286,6 +350,7 @@ jobs:
           name: portcve-signed-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             artifacts/signed/portcve.exe
+            artifacts/signed/install.ps1
             artifacts/signed/SIGNING-METADATA.json
           if-no-files-found: error
           compression-level: 0
@@ -328,18 +393,22 @@ jobs:
           Set-StrictMode -Version Latest
 
           $files = @(Get-ChildItem -LiteralPath artifacts/signed -Recurse -File)
-          $expectedNames = @('portcve.exe', 'SIGNING-METADATA.json')
+          $expectedNames = @('install.ps1', 'portcve.exe', 'SIGNING-METADATA.json')
           if ($files.Count -ne $expectedNames.Count -or @($files.Name | Where-Object { $_ -notin $expectedNames }).Count -ne 0) {
             throw "Signed transfer contains an unexpected file set: $($files.Name -join ', ')."
           }
 
           ./scripts/Verify-ReleaseSignature.ps1 -Path artifacts/signed/portcve.exe -ExpectedSignerSubject $env:EXPECTED_SIGNER_SUBJECT
+          ./scripts/Verify-ReleaseSignature.ps1 -Path artifacts/signed/install.ps1 -ExpectedSignerSubject $env:EXPECTED_SIGNER_SUBJECT
 
           $metadata = Get-Content -LiteralPath artifacts/signed/SIGNING-METADATA.json -Raw | ConvertFrom-Json
           $actualHash = (Get-FileHash -LiteralPath artifacts/signed/portcve.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($metadata.schema_version -ne 1 -or
               -not [StringComparer]::Ordinal.Equals([string]$metadata.artifact.sha256, $actualHash) -or
               -not [StringComparer]::Ordinal.Equals([string]$metadata.signature.signer.subject, $env:EXPECTED_SIGNER_SUBJECT) -or
+              $metadata.signature.timestamp.binding_verified -ne $true -or
+              -not [StringComparer]::Ordinal.Equals([string]$metadata.signature.timestamp.binding_method, 'Rfc3161TimestampToken.VerifySignatureForSignerInfo') -or
+              [string]::IsNullOrWhiteSpace([string]$metadata.signature.timestamp.timestamp_utc) -or
               -not [StringComparer]::Ordinal.Equals([string]$metadata.source.repository, $env:GITHUB_REPOSITORY) -or
               -not [StringComparer]::OrdinalIgnoreCase.Equals([string]$metadata.source.commit_sha, $env:RELEASE_COMMIT) -or
               -not [StringComparer]::Ordinal.Equals([string]$metadata.source.tag, $env:RELEASE_TAG)) {
@@ -366,49 +435,8 @@ jobs:
           $zipName = "portcve-$($env:RELEASE_TAG)-win-x64.zip"
           Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath (Join-Path $releaseRoot $zipName)
           Copy-Item -LiteralPath artifacts/signed/portcve.exe -Destination $releaseRoot
+          Copy-Item -LiteralPath artifacts/signed/install.ps1 -Destination $releaseRoot
           Copy-Item -LiteralPath artifacts/signed/SIGNING-METADATA.json -Destination $releaseRoot
-
-          $installerTemplatePath = Join-Path $PWD 'scripts/install.ps1'
-          if (-not (Test-Path -LiteralPath $installerTemplatePath -PathType Leaf)) {
-            throw 'The fail-closed installer template scripts/install.ps1 is missing.'
-          }
-          $placeholder = '__PORTCVE_EXPECTED_SIGNER_SUBJECT__'
-          $installer = [IO.File]::ReadAllText($installerTemplatePath)
-          $placeholderCount = [regex]::Matches($installer, [regex]::Escape($placeholder)).Count
-          if ($placeholderCount -ne 1) {
-            throw "Installer template must contain exactly one signer-subject placeholder; found $placeholderCount."
-          }
-          # The placeholder is inside a single-quoted PowerShell literal. Escape
-          # legal apostrophes in an X.500 subject before substitution.
-          $escapedSignerSubject = $env:EXPECTED_SIGNER_SUBJECT.Replace("'", "''")
-          $installer = $installer.Replace($placeholder, $escapedSignerSubject)
-          if ($installer.Contains($placeholder)) {
-            throw 'Installer signer-subject placeholder replacement failed.'
-          }
-          $installerOutputPath = Join-Path $releaseRoot 'install.ps1'
-          [IO.File]::WriteAllText($installerOutputPath, $installer, [Text.UTF8Encoding]::new($false))
-
-          $tokens = $null
-          $parseErrors = $null
-          $installerAst = [Management.Automation.Language.Parser]::ParseFile(
-            $installerOutputPath,
-            [ref]$tokens,
-            [ref]$parseErrors
-          )
-          if ($parseErrors.Count -ne 0) {
-            throw "Templated installer is not valid PowerShell: $($parseErrors.Message -join '; ')"
-          }
-          $subjectAssignments = @($installerAst.FindAll({
-            param($node)
-            $node -is [Management.Automation.Language.AssignmentStatementAst] -and
-              [StringComparer]::Ordinal.Equals($node.Left.Extent.Text, '$script:ExpectedSignerSubject')
-          }, $true))
-          if ($subjectAssignments.Count -ne 1 -or
-              $subjectAssignments[0].Right -isnot [Management.Automation.Language.CommandExpressionAst] -or
-              $subjectAssignments[0].Right.Expression -isnot [Management.Automation.Language.StringConstantExpressionAst] -or
-              -not [StringComparer]::Ordinal.Equals([string]$subjectAssignments[0].Right.Expression.Value, $env:EXPECTED_SIGNER_SUBJECT)) {
-            throw 'Templated installer does not evaluate to the exact expected signer subject.'
-          }
 
           $checksumTargets = @(Get-ChildItem -LiteralPath $releaseRoot -File | Sort-Object Name)
           $checksumLines = @($checksumTargets | ForEach-Object {
@@ -418,6 +446,7 @@ jobs:
           [IO.File]::WriteAllLines((Join-Path $releaseRoot 'SHA256SUMS.txt'), $checksumLines, [Text.Encoding]::ASCII)
 
           ./scripts/Verify-ReleaseSignature.ps1 -Path (Join-Path $releaseRoot 'portcve.exe') -ExpectedSignerSubject $env:EXPECTED_SIGNER_SUBJECT
+          ./scripts/Verify-ReleaseSignature.ps1 -Path (Join-Path $releaseRoot 'install.ps1') -ExpectedSignerSubject $env:EXPECTED_SIGNER_SUBJECT
 
       - name: Attest release asset provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

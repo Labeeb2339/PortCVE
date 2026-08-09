@@ -11,7 +11,8 @@ PortCVE is a collection-and-correlation CLI. It does not sniff packets and does 
 5. The Docker collector probes the local `\\.\pipe\docker_engine` named pipe, negotiates the Engine API version, reads running-container publications, and correlates them to observed endpoints by protocol, host address, and host port.
 6. The optional firewall collector reads the merged `ActiveStore` through structured NetSecurity CIM objects and joins rule filters by stable rule ID.
 7. The evaluator separates exact matches from conditional or unsupported rules. Unresolved predicates lower confidence and can produce `mixed` or `unknown`.
-8. Renderers emit human text, versioned JSON, JSONL events, or normalized lockfiles.
+8. For `scan`, the vulnerability layer selects only immutable correlated Docker image IDs or an explicitly supplied local SBOM, invokes a separately installed Trivy process in offline mode, and records database freshness and provider completeness.
+9. Renderers emit human text, versioned JSON, JSONL events, normalized lockfiles, or vulnerability reports.
 
 Native socket collection and a bounded Docker named-pipe probe run for every live collection. If the pipe is absent, the Docker collector returns `unavailable` quickly and does not start Docker Desktop or any container. Windows Firewall collection is intentionally opt-in for inventory, lock, and watch because effective rule enumeration is much slower.
 
@@ -27,12 +28,21 @@ PortCVE labels evidence by source because the sources have different semantics:
 | Network profile | Local `Get-NetConnectionProfile` | Structured CIM configuration used to map an adapter to a Windows profile. |
 | Docker published-port metadata | Local Docker Engine `/version` and negotiated `/containers/json` over `\\.\pipe\docker_engine` | Runtime-declared mapping for a running container; correlated to a host socket by tuple with medium confidence, not proof that the container owns the Windows socket. |
 | Firewall profile/rules/filters | Local NetSecurity commands against `ActiveStore` | Static configuration evidence consumed by PortCVE's evaluator, not a live WFP packet-classification result. |
+| Package advisory matches | Separately installed Trivy, immutable local Docker image ID or explicit local SBOM, and pre-populated local database | Known-advisory match for an observed package version; not proof of reachability, exploitability, or compromise. |
 
 The PowerShell scripts are bundled constants and do not interpolate CLI input. They run locally, but `--resolve-accounts` separately calls Windows account lookup APIs; Windows can contact domain services when a SID is not local or cached.
 
 ## Data boundaries
 
-The core model contains platform-neutral listeners, owners, interfaces, container publications, policy evidence, diagnostics, and collector status. Win32 and Docker transport/parser structures remain in their collection layers.
+The core model contains platform-neutral listeners, owners, interfaces, container publications, policy evidence, vulnerability subjects/findings/provider runs, diagnostics, and evidence status. Win32, Docker transport, and Trivy parser structures remain in their collection layers.
+
+## Offline vulnerability assessment
+
+`scan` begins from the same point-in-time listener snapshot used by the rest of the CLI. It never guesses a product from a native process name, executable metadata, banner, or port number. Automatic Docker association requires a correlated immutable `sha256:` image ID; an SBOM association exists only when the user supplies that local file for an exact TCP-port query.
+
+Before Trivy starts, PortCVE validates the cache, database, SBOM, and per-invocation temp paths as local-drive paths without reparse traversal. It removes every inherited `TRIVY_*` setting case-insensitively, then sets a small offline allowlist. The child process runs without a shell, with bounded stdout/stderr, a timeout, bounded post-kill waiting, and guarded temp cleanup. Missing or malformed evidence is unavailable, stale evidence is partial, and malformed Trivy result structures fail closed.
+
+Findings retain the advisory ID, package/version, fixes, source severity, aliases, references, database time, and subject identity confidence. The report explicitly sets exploitability and network reachability to `not_assessed`. A zero-finding result means only that no known matches were present in the named database snapshot.
 
 Each collector reports:
 

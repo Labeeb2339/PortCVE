@@ -8,7 +8,7 @@ Installs a signed PortCVE release for the current Windows user.
 Downloads a versioned ZIP and SHA256SUMS.txt from the official
 Labeeb2339/PortCVE GitHub release, verifies the ZIP checksum, then requires a
 trusted Authenticode signature, the release-bound signer subject, the Code
-Signing EKU, and an RFC 3161 timestamp before installing portcve.exe.
+Signing EKU, and a trusted timestamp before installing portcve.exe.
 
 This script has no unsigned, local-asset, or signature-bypass mode.
 #>
@@ -24,6 +24,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $script:Repository = 'Labeeb2339/PortCVE'
 $script:ExpectedSignerSubject = '__PORTCVE_EXPECTED_SIGNER_SUBJECT__'
+$script:ReleaseTagPattern = '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|(?=[0-9A-Za-z-]*[A-Za-z-])[0-9A-Za-z][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|(?=[0-9A-Za-z-]*[A-Za-z-])[0-9A-Za-z][0-9A-Za-z-]*))*))?$'
 $script:InstallerUserAgent = 'PortCVE-Installer/1.0'
 $script:ApiLimitBytes = 2MB
 $script:ChecksumLimitBytes = 128KB
@@ -123,7 +124,7 @@ function Resolve-Release {
     if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
         $tag = $RequestedVersion.Trim()
         if (-not $tag.StartsWith('v', [StringComparison]::Ordinal)) { $tag = "v$tag" }
-        if ($tag -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+        if (-not [regex]::IsMatch($tag, $script:ReleaseTagPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
             throw "Version '$RequestedVersion' is not a supported semantic release tag."
         }
         $apiUri = [Uri]("https://api.github.com/repos/{0}/releases/tags/{1}" -f $script:Repository, [Uri]::EscapeDataString($tag))
@@ -136,7 +137,7 @@ function Resolve-Release {
     Save-BoundedHttpsFile -Uri $apiUri -Destination $metadataPath -MaximumBytes $script:ApiLimitBytes
     $release = Read-BoundedUtf8File -Path $metadataPath -MaximumBytes $script:ApiLimitBytes | ConvertFrom-Json
     $resolvedTag = [string]$release.tag_name
-    if ($resolvedTag -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+    if (-not [regex]::IsMatch($resolvedTag, $script:ReleaseTagPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
         throw "GitHub returned unsupported release tag '$resolvedTag'."
     }
     if ($null -ne $tag -and $resolvedTag -cne $tag) {
@@ -254,66 +255,6 @@ function Expand-PortCVEExecutable {
     }
 }
 
-function Test-Rfc3161Timestamp {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$ExpectedSignerSubject
-    )
-
-    Add-Type -AssemblyName System.Security
-    $stream = [IO.File]::OpenRead($Path)
-    $reader = New-Object IO.BinaryReader($stream)
-    try {
-        if ($stream.Length -gt $script:ExecutableLimitBytes -or $stream.Length -lt 512) { return $false }
-        $stream.Position = 0x3c
-        $peOffset = $reader.ReadInt32()
-        if ($peOffset -lt 0x40 -or $peOffset -gt ($stream.Length - 256)) { return $false }
-        $stream.Position = $peOffset
-        if ($reader.ReadUInt32() -ne 0x00004550) { return $false }
-        $optionalOffset = $peOffset + 24
-        $stream.Position = $optionalOffset
-        $magic = $reader.ReadUInt16()
-        if ($magic -eq 0x10b) { $directoryOffset = $optionalOffset + 96 }
-        elseif ($magic -eq 0x20b) { $directoryOffset = $optionalOffset + 112 }
-        else { return $false }
-        $stream.Position = $directoryOffset + (8 * 4)
-        $certificateOffset = [long]$reader.ReadUInt32()
-        $certificateSize = [long]$reader.ReadUInt32()
-        if ($certificateOffset -le 0 -or $certificateSize -lt 8 -or ($certificateOffset + $certificateSize) -gt $stream.Length) { return $false }
-
-        $position = $certificateOffset
-        while ($position -lt ($certificateOffset + $certificateSize)) {
-            $stream.Position = $position
-            $length = [long]$reader.ReadUInt32()
-            $null = $reader.ReadUInt16()
-            $type = $reader.ReadUInt16()
-            if ($length -lt 8 -or ($position + $length) -gt ($certificateOffset + $certificateSize)) { return $false }
-            if ($type -eq 2) {
-                $content = $reader.ReadBytes([int]($length - 8))
-                $cms = New-Object System.Security.Cryptography.Pkcs.SignedCms
-                $cms.Decode($content)
-                foreach ($signer in $cms.SignerInfos) {
-                    if ($null -ne $signer.Certificate `
-                        -and [string]::Equals($signer.Certificate.Subject, $ExpectedSignerSubject, [StringComparison]::Ordinal)) {
-                        foreach ($attribute in $signer.UnsignedAttributes) {
-                            if ($attribute.Oid.Value -eq '1.3.6.1.4.1.311.3.3.1') { return $true }
-                        }
-                    }
-                }
-            }
-            $position += (($length + 7) -band (-bnot 7))
-        }
-        return $false
-    }
-    catch {
-        return $false
-    }
-    finally {
-        $reader.Dispose()
-        $stream.Dispose()
-    }
-}
-
 function Test-CertificateEku {
     param(
         [Parameter(Mandatory = $true)][Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
@@ -331,15 +272,30 @@ function Test-CertificateEku {
     return $false
 }
 
-function Assert-TrustedReleaseExecutable {
-    param([Parameter(Mandatory = $true)][string]$Path)
+function Assert-TrustedAuthenticodeFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedFileName
+    )
 
     if ([string]::IsNullOrWhiteSpace($script:ExpectedSignerSubject) -or $script:ExpectedSignerSubject.Contains('__PORTCVE_')) {
         throw 'This installer template was not finalized by the PortCVE release workflow. Refusing installation.'
     }
-    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Signed '$ExpectedFileName' must be invoked from or resolved to a file."
+    }
+    $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf) -or
+        -not [string]::Equals([IO.Path]::GetFileName($resolved), $ExpectedFileName, [StringComparison]::Ordinal)) {
+        throw "Signed file must be named exactly '$ExpectedFileName'."
+    }
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $resolved
     if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $null -eq $signature.SignerCertificate) {
-        throw "portcve.exe does not have a valid trusted Authenticode signature: $($signature.StatusMessage)"
+        throw "'$ExpectedFileName' does not have a valid trusted Authenticode signature: $($signature.StatusMessage)"
+    }
+    if (-not [string]::Equals([string]$signature.SignatureType, 'Authenticode', [StringComparison]::Ordinal)) {
+        throw "'$ExpectedFileName' must carry its own embedded Authenticode signature; Windows selected '$($signature.SignatureType)'."
     }
     if (-not [string]::Equals($signature.SignerCertificate.Subject, $script:ExpectedSignerSubject, [StringComparison]::Ordinal)) {
         throw "Signer subject mismatch. Expected '$script:ExpectedSignerSubject'; received '$($signature.SignerCertificate.Subject)'."
@@ -351,8 +307,17 @@ function Assert-TrustedReleaseExecutable {
     if (-not (Test-CertificateEku -Certificate $signature.TimeStamperCertificate -RequiredOid '1.3.6.1.5.5.7.3.8')) {
         throw 'Timestamp certificate does not contain the Time Stamping EKU.'
     }
-    if (-not (Test-Rfc3161Timestamp -Path $Path -ExpectedSignerSubject $script:ExpectedSignerSubject)) { throw 'The expected Authenticode signer does not contain an RFC 3161 timestamp.' }
     return $signature
+}
+
+function Assert-TrustedReleaseExecutable {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return Assert-TrustedAuthenticodeFile -Path $Path -ExpectedFileName 'portcve.exe'
+}
+
+function Assert-TrustedInstallerFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return Assert-TrustedAuthenticodeFile -Path $Path -ExpectedFileName 'install.ps1'
 }
 
 function Get-CanonicalPath {
@@ -485,14 +450,20 @@ function Invoke-AtomicInstall {
 function Invoke-PortCVEInstall {
     param(
         [string]$Version,
-        [string]$InstallDirectory
+        [string]$InstallDirectory,
+        [AllowNull()][string]$InstallerPath
     )
+
+    if ([string]::IsNullOrWhiteSpace($script:ExpectedSignerSubject) -or $script:ExpectedSignerSubject.Contains('__PORTCVE_')) {
+        throw 'This is an unfinalized installer template, not a production release asset.'
+    }
+    if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
+        throw 'PortCVE installation must run from the signed install.ps1 file; piped or in-memory execution is refused.'
+    }
+    $null = Assert-TrustedInstallerFile -Path $InstallerPath
 
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitOperatingSystem) {
         throw 'PortCVE installer supports 64-bit Windows only.'
-    }
-    if ([string]::IsNullOrWhiteSpace($script:ExpectedSignerSubject) -or $script:ExpectedSignerSubject.Contains('__PORTCVE_')) {
-        throw 'This is an unfinalized installer template, not a production release asset.'
     }
 
     if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
@@ -567,4 +538,4 @@ function Invoke-PortCVEInstall {
 }
 
 # PORTCVE_INSTALLER_ENTRYPOINT
-Invoke-PortCVEInstall @PSBoundParameters
+Invoke-PortCVEInstall @PSBoundParameters -InstallerPath $PSCommandPath
