@@ -1,6 +1,6 @@
 # Architecture
 
-BindWitness is a collection-and-correlation CLI. It does not sniff packets and does not execute untrusted code.
+PortCVE is a collection-and-correlation CLI. It does not sniff packets and does not execute untrusted code.
 
 ## Pipeline
 
@@ -17,7 +17,7 @@ Native socket collection and a bounded Docker named-pipe probe run for every liv
 
 ## Evidence source boundary
 
-BindWitness labels evidence by source because the sources have different semantics:
+PortCVE labels evidence by source because the sources have different semantics:
 
 | Evidence | Source | Claim boundary |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ BindWitness labels evidence by source because the sources have different semanti
 | Adapter address and state | Local .NET network-interface APIs | Local adapter configuration observed during the collection window. |
 | Network profile | Local `Get-NetConnectionProfile` | Structured CIM configuration used to map an adapter to a Windows profile. |
 | Docker published-port metadata | Local Docker Engine `/version` and negotiated `/containers/json` over `\\.\pipe\docker_engine` | Runtime-declared mapping for a running container; correlated to a host socket by tuple with medium confidence, not proof that the container owns the Windows socket. |
-| Firewall profile/rules/filters | Local NetSecurity commands against `ActiveStore` | Static configuration evidence consumed by BindWitness's evaluator, not a live WFP packet-classification result. |
+| Firewall profile/rules/filters | Local NetSecurity commands against `ActiveStore` | Static configuration evidence consumed by PortCVE's evaluator, not a live WFP packet-classification result. |
 
 The PowerShell scripts are bundled constants and do not interpolate CLI input. They run locally, but `--resolve-accounts` separately calls Windows account lookup APIs; Windows can contact domain services when a SID is not local or cached.
 
@@ -50,7 +50,7 @@ Each Engine publication is matched against Windows IP Helper evidence using tran
 
 When a lockfile includes complete container evidence and every correlated publication supplies an image ID, the normalized owner is `container-image-set:<sha256>` with strength `container_image`. The digest is computed over the sorted distinct image-ID set, so container names and restart-specific IDs are excluded while an image-set change remains detectable. `evidence.containers` distinguishes `complete`, `partial`, and `not_collected`; a baseline that used container evidence requires comparable evidence during `diff` and `check`. Dimension-level loss is emitted as `evidence_regressed`; strict diff and check return exit code `3` instead of presenting an evidence gap as no drift.
 
-The integrated path was validated on 2026-08-09 against Docker Desktop client/server 28.3.2 on Windows NT 10.0.26200.0 with the `desktop-linux` WSL2 context. An official `alpine:3.22` fixture published one loopback TCP tuple and one wildcard UDP tuple; both echoed real payloads, an independent Windows CIM check observed the exact tuples, and BindWitness correlated both while retaining `com.docker.backend.exe` as the Windows owner. A container-image lock passed unchanged, then reported `owner_changed` with exit code 1 when PowerShell replaced the same TCP endpoint. This is validation of the local collection/correlation/gating path on that environment, not a claim about external reachability, guest-process ownership, Linux hosts, or every Docker version.
+The integrated path was validated on 2026-08-09 against Docker Desktop client/server 28.3.2 on Windows NT 10.0.26200.0 with the `desktop-linux` WSL2 context. An official `alpine:3.22` fixture published one loopback TCP tuple and one wildcard UDP tuple; both echoed real payloads, an independent Windows CIM check observed the exact tuples, and the then-named BindWitness build correlated both while retaining `com.docker.backend.exe` as the Windows owner. A container-image lock passed unchanged, then reported `owner_changed` with exit code 1 when PowerShell replaced the same TCP endpoint. This is validation of the local collection/correlation/gating path on that environment, not a claim about external reachability, guest-process ownership, Linux hosts, or every Docker version.
 
 ## Listener identity
 

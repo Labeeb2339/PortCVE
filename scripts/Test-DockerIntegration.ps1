@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Runs a mutating, local Docker integration check for BindWitness.
+Runs a mutating, local Docker integration check for PortCVE.
 
 .DESCRIPTION
 This script may pull alpine:3.22, creates and starts one uniquely named and
@@ -12,7 +12,7 @@ to the local network.
 #>
 [CmdletBinding()]
 param(
-    [string]$BindWitnessPath,
+    [string]$PortCVEPath,
     [switch]$ValidateLockCheck,
     [switch]$AllowWildcardUdp,
     [ValidateRange(5, 120)]
@@ -25,9 +25,9 @@ $ErrorActionPreference = 'Stop'
 $dockerImage = 'alpine:3.22'
 $tcpContainerPort = 18080
 $udpContainerPort = 18081
-$labelName = 'io.bindwitness.integration-id'
+$labelName = 'io.portcve.integration-id'
 $runId = [Guid]::NewGuid().ToString('N')
-$containerName = 'bindwitness-it-{0}' -f $runId.Substring(0, 12)
+$containerName = 'portcve-it-{0}' -f $runId.Substring(0, 12)
 $containerId = $null
 $containerCreateAttempted = $false
 $commandCounter = 0
@@ -38,18 +38,18 @@ if ($AllowWildcardUdp) {
 }
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if ([string]::IsNullOrWhiteSpace($BindWitnessPath)) {
-    $BindWitnessPath = Join-Path $repositoryRoot 'src\BindWitness\bin\Release\net10.0\win-x64\bindwitness.exe'
+if ([string]::IsNullOrWhiteSpace($PortCVEPath)) {
+    $PortCVEPath = Join-Path $repositoryRoot 'src\PortCVE\bin\Release\net10.0\win-x64\portcve.exe'
 }
-elseif (-not [IO.Path]::IsPathRooted($BindWitnessPath)) {
-    $BindWitnessPath = [IO.Path]::GetFullPath((Join-Path (Get-Location).Path $BindWitnessPath))
+elseif (-not [IO.Path]::IsPathRooted($PortCVEPath)) {
+    $PortCVEPath = [IO.Path]::GetFullPath((Join-Path (Get-Location).Path $PortCVEPath))
 }
 else {
-    $BindWitnessPath = [IO.Path]::GetFullPath($BindWitnessPath)
+    $PortCVEPath = [IO.Path]::GetFullPath($PortCVEPath)
 }
 
-if (-not (Test-Path -LiteralPath $BindWitnessPath -PathType Leaf)) {
-    throw "BindWitness Release executable was not found at '$BindWitnessPath'. Build or publish Release first, or pass -BindWitnessPath."
+if (-not (Test-Path -LiteralPath $PortCVEPath -PathType Leaf)) {
+    throw "PortCVE Release executable was not found at '$PortCVEPath'. Build or publish Release first, or pass -PortCVEPath."
 }
 
 $dockerCommand = Get-Command docker.exe -CommandType Application -ErrorAction Stop
@@ -57,7 +57,7 @@ $dockerPath = $dockerCommand.Path
 
 $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $temporaryPrefix = $temporaryRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-$integrationTempDirectory = [IO.Path]::GetFullPath((Join-Path $temporaryRoot ("bindwitness-it-$runId")))
+$integrationTempDirectory = [IO.Path]::GetFullPath((Join-Path $temporaryRoot ("portcve-it-$runId")))
 if (-not $integrationTempDirectory.StartsWith($temporaryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to use an integration temporary directory outside '$temporaryRoot'."
 }
@@ -260,7 +260,7 @@ function Wait-ForEchoes {
     throw "TCP and UDP echo services did not both respond within $Timeout seconds (tcp=$tcpPassed, udp=$udpPassed)."
 }
 
-function Get-BindWitnessSnapshot {
+function Get-PortCVESnapshot {
     param([switch]$IncludePrivate)
 
     $arguments = @('list', '--json')
@@ -268,8 +268,8 @@ function Get-BindWitnessSnapshot {
         $arguments += '--include-private'
     }
 
-    $description = if ($IncludePrivate) { 'BindWitness private JSON collection' } else { 'BindWitness default JSON collection' }
-    $capture = Invoke-CapturedCommand -FilePath $script:BindWitnessPath -ArgumentList $arguments -Description $description
+    $description = if ($IncludePrivate) { 'PortCVE private JSON collection' } else { 'PortCVE default JSON collection' }
+    $capture = Invoke-CapturedCommand -FilePath $script:PortCVEPath -ArgumentList $arguments -Description $description
     $snapshot = ConvertFrom-CapturedJson -Json $capture.StdOut -Description $description
     return [pscustomobject]@{
         Raw = $capture.StdOut
@@ -324,7 +324,7 @@ function Find-ContainerMappings {
     return $matches.ToArray()
 }
 
-function Wait-ForBindWitnessMappings {
+function Wait-ForPortCVEMappings {
     param(
         [int]$TcpHostPort,
         [int]$UdpHostPort,
@@ -336,7 +336,7 @@ function Wait-ForBindWitnessMappings {
     $lastReason = 'No snapshot was collected.'
     do {
         try {
-            $capture = Get-BindWitnessSnapshot -IncludePrivate:$IncludePrivate
+            $capture = Get-PortCVESnapshot -IncludePrivate:$IncludePrivate
             $context = if ($IncludePrivate) { 'Private JSON' } else { 'Default JSON' }
             Assert-DockerCollectorComplete -Snapshot $capture.Snapshot -Context $context
             $tcpMatches = @(Find-ContainerMappings -Snapshot $capture.Snapshot -HostPort $TcpHostPort -ContainerPort $script:tcpContainerPort -Protocol 'tcp')
@@ -359,7 +359,7 @@ function Wait-ForBindWitnessMappings {
         Start-Sleep -Milliseconds 300
     } while ([DateTime]::UtcNow -lt $deadline)
 
-    throw "BindWitness did not report both Docker mappings within $Timeout seconds. Last result: $lastReason"
+    throw "PortCVE did not report both Docker mappings within $Timeout seconds. Last result: $lastReason"
 }
 
 function Assert-PrivateMapping {
@@ -415,12 +415,12 @@ function Test-LockCheckRoundTrip {
         $arguments += '--include-udp'
     }
 
-    $lockCapture = Invoke-CapturedCommand -FilePath $script:BindWitnessPath -ArgumentList $arguments -Description "BindWitness $Protocol lock"
-    $lockResult = ConvertFrom-CapturedJson -Json $lockCapture.StdOut -Description "BindWitness $Protocol lock"
+    $lockCapture = Invoke-CapturedCommand -FilePath $script:PortCVEPath -ArgumentList $arguments -Description "PortCVE $Protocol lock"
+    $lockResult = ConvertFrom-CapturedJson -Json $lockCapture.StdOut -Description "PortCVE $Protocol lock"
     Assert-Condition ([int]$lockResult.listener_count -gt 0) "$Protocol lock contained no listeners."
     Assert-Condition ($lockResult.evidence.containers -eq 'complete') "$Protocol lock container evidence was not complete."
 
-    $lockfile = ConvertFrom-CapturedJson -Json ([IO.File]::ReadAllText($lockPath)) -Description "BindWitness $Protocol lockfile"
+    $lockfile = ConvertFrom-CapturedJson -Json ([IO.File]::ReadAllText($lockPath)) -Description "PortCVE $Protocol lockfile"
     Assert-Condition ([int]$lockfile.selector.port -eq $Port) "$Protocol lockfile stored the wrong port selector."
     Assert-Condition ($lockfile.selector.protocol -eq $Protocol) "$Protocol lockfile stored the wrong protocol selector."
     $lockedListeners = @($lockfile.listeners)
@@ -429,8 +429,8 @@ function Test-LockCheckRoundTrip {
         @($lockedListeners | Where-Object { $_.owner_identity_strength -eq 'container_image' }).Count -eq $lockedListeners.Count
     ) "$Protocol lockfile did not use container_image identity for every selected listener."
 
-    $checkCapture = Invoke-CapturedCommand -FilePath $script:BindWitnessPath -ArgumentList @('check', $lockPath, '--json') -Description "BindWitness $Protocol unchanged check"
-    $checkResult = ConvertFrom-CapturedJson -Json $checkCapture.StdOut -Description "BindWitness $Protocol unchanged check"
+    $checkCapture = Invoke-CapturedCommand -FilePath $script:PortCVEPath -ArgumentList @('check', $lockPath, '--json') -Description "PortCVE $Protocol unchanged check"
+    $checkResult = ConvertFrom-CapturedJson -Json $checkCapture.StdOut -Description "PortCVE $Protocol unchanged check"
     Assert-Condition ($checkResult.changed -eq $false) "$Protocol lock/check reported endpoint drift immediately after capture."
 
     return [pscustomobject]@{
@@ -488,8 +488,8 @@ try {
     Assert-Condition ($inspectObjects[0].Config.Labels.$labelName -eq $runId) 'Docker inspect returned the wrong integration label.'
     Assert-Condition ($containerImageId -match '^sha256:[0-9a-f]{64}$') 'Docker inspect did not return a canonical image ID.'
 
-    $tcpPayload = "bindwitness-tcp-$runId"
-    $udpPayload = "bindwitness-udp-$runId"
+    $tcpPayload = "portcve-tcp-$runId"
+    $udpPayload = "portcve-udp-$runId"
     Wait-ForEchoes -TcpPort $tcpHostPort -UdpPort $udpHostPort -TcpPayload $tcpPayload -UdpPayload $udpPayload -Timeout $TimeoutSeconds
 
     $tcpCim = @(Get-NetTCPConnection -State Listen -LocalPort $tcpHostPort -ErrorAction SilentlyContinue |
@@ -499,11 +499,11 @@ try {
     Assert-Condition ($tcpCim.Count -gt 0) 'Windows CIM did not observe the published TCP host tuple.'
     Assert-Condition ($udpCim.Count -gt 0) 'Windows CIM did not observe the published UDP host tuple.'
 
-    $privateCapture = Wait-ForBindWitnessMappings -TcpHostPort $tcpHostPort -UdpHostPort $udpHostPort -Timeout $TimeoutSeconds -IncludePrivate
+    $privateCapture = Wait-ForPortCVEMappings -TcpHostPort $tcpHostPort -UdpHostPort $udpHostPort -Timeout $TimeoutSeconds -IncludePrivate
     Assert-PrivateMapping -Matches $privateCapture.TcpMatches -Protocol 'tcp' -HostPort $tcpHostPort -ContainerPort $tcpContainerPort -HostAddress '127.0.0.1' -ExpectedContainerId $containerId -ExpectedContainerName $containerName -ExpectedImageId $containerImageId
     Assert-PrivateMapping -Matches $privateCapture.UdpMatches -Protocol 'udp' -HostPort $udpHostPort -ContainerPort $udpContainerPort -HostAddress $udpHostAddress -ExpectedContainerId $containerId -ExpectedContainerName $containerName -ExpectedImageId $containerImageId
 
-    $defaultCapture = Wait-ForBindWitnessMappings -TcpHostPort $tcpHostPort -UdpHostPort $udpHostPort -Timeout $TimeoutSeconds
+    $defaultCapture = Wait-ForPortCVEMappings -TcpHostPort $tcpHostPort -UdpHostPort $udpHostPort -Timeout $TimeoutSeconds
     Assert-RawValueAbsent -Json $defaultCapture.Raw -Value $containerId -Description 'container ID'
     Assert-RawValueAbsent -Json $defaultCapture.Raw -Value $containerId.Substring(0, 12) -Description 'short container ID'
     Assert-RawValueAbsent -Json $defaultCapture.Raw -Value $containerName -Description 'container name'
@@ -519,7 +519,7 @@ try {
     $result = [ordered]@{
         status = 'passed'
         docker_server_version = $serverVersion
-        bindwitness_path = $BindWitnessPath
+        portcve_path = $PortCVEPath
         container_name = $containerName
         tcp = [ordered]@{
             host_address = '127.0.0.1'

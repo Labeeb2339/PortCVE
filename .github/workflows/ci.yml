@@ -21,25 +21,25 @@ jobs:
           dotnet-version: 10.0.101
 
       - name: Restore
-        run: dotnet restore BindWitness.sln --locked-mode
+        run: dotnet restore PortCVE.sln --locked-mode
 
       - name: Verify formatting
-        run: dotnet format BindWitness.sln --verify-no-changes --no-restore
+        run: dotnet format PortCVE.sln --verify-no-changes --no-restore
 
       - name: Build
-        run: dotnet build BindWitness.sln -c Release --no-restore
+        run: dotnet build PortCVE.sln -c Release --no-restore
 
       - name: Test
-        run: dotnet test BindWitness.sln -c Release --no-build --logger "trx;LogFileName=tests.trx" --collect "XPlat Code Coverage" --results-directory TestResults
+        run: dotnet test PortCVE.sln -c Release --no-build --logger "trx;LogFileName=tests.trx" --collect "XPlat Code Coverage" --results-directory TestResults
 
       - name: Publish Windows x64
-        run: dotnet publish src/BindWitness/BindWitness.csproj -c Release -r win-x64 --self-contained true --no-build -o artifacts/win-x64
+        run: dotnet publish src/PortCVE/PortCVE.csproj -c Release -r win-x64 --self-contained true --no-build -o artifacts/win-x64
 
       - name: Smoke test
         shell: pwsh
         run: |
-          ./artifacts/win-x64/bindwitness.exe --version
-          $json = ./artifacts/win-x64/bindwitness.exe snapshot --no-firewall 2>$null | ConvertFrom-Json
+          ./artifacts/win-x64/portcve.exe --version
+          $json = ./artifacts/win-x64/portcve.exe snapshot --no-firewall 2>$null | ConvertFrom-Json
           if ($json.schema_version -ne 1) { throw 'Unexpected snapshot schema.' }
 
       - name: Upload test results
@@ -52,5 +52,5 @@ jobs:
       - name: Upload smoke artifact
         uses: actions/upload-artifact@v7
         with:
-          name: bindwitness-win-x64
-          path: artifacts/win-x64/bindwitness.exe
+          name: portcve-win-x64
+          path: artifacts/win-x64/portcve.exe

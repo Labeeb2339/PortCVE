@@ -20,29 +20,29 @@ jobs:
           dotnet-version: 10.0.101
 
       - name: Restore
-        run: dotnet restore BindWitness.sln --locked-mode
+        run: dotnet restore PortCVE.sln --locked-mode
 
       - name: Verify tag matches project version
         shell: pwsh
         run: |
           $expected = '${{ github.ref_name }}'.TrimStart('v')
-          $actual = dotnet msbuild src/BindWitness/BindWitness.csproj -getProperty:Version
+          $actual = dotnet msbuild src/PortCVE/PortCVE.csproj -getProperty:Version
           if ($actual.Trim() -ne $expected) {
             throw "Tag version '$expected' does not match project version '$($actual.Trim())'."
           }
 
       - name: Test
-        run: dotnet test BindWitness.sln -c Release --no-restore
+        run: dotnet test PortCVE.sln -c Release --no-restore
 
       - name: Publish
-        run: dotnet publish src/BindWitness/BindWitness.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts/publish
+        run: dotnet publish src/PortCVE/PortCVE.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts/publish
 
       - name: Verify public binary boundary
         shell: pwsh
         run: |
           $files = @(Get-ChildItem artifacts/publish -File)
-          if ($files.Count -ne 1 -or $files[0].Name -ne 'bindwitness.exe') {
-            throw "Publish output must contain only bindwitness.exe before public files are added; found: $($files.Name -join ', ')."
+          if ($files.Count -ne 1 -or $files[0].Name -ne 'portcve.exe') {
+            throw "Publish output must contain only portcve.exe before public files are added; found: $($files.Name -join ', ')."
           }
 
       - name: Package and checksum
@@ -51,9 +51,9 @@ jobs:
           New-Item -ItemType Directory -Force artifacts/release | Out-Null
           Copy-Item README.md, CHANGELOG.md, LICENSE, SECURITY.md artifacts/publish/
           Copy-Item schema artifacts/publish/schema -Recurse
-          Compress-Archive -Path artifacts/publish/* -DestinationPath artifacts/release/bindwitness-${{ github.ref_name }}-win-x64.zip
-          $hash = (Get-FileHash artifacts/release/bindwitness-${{ github.ref_name }}-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  bindwitness-${{ github.ref_name }}-win-x64.zip" | Set-Content artifacts/release/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path artifacts/publish/* -DestinationPath artifacts/release/portcve-${{ github.ref_name }}-win-x64.zip
+          $hash = (Get-FileHash artifacts/release/portcve-${{ github.ref_name }}-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  portcve-${{ github.ref_name }}-win-x64.zip" | Set-Content artifacts/release/SHA256SUMS.txt -Encoding ascii
 
       - name: Create GitHub release
         env:

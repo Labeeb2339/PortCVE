@@ -2,7 +2,11 @@
 
 All notable changes will be documented here. The project follows semantic versioning after `1.0`; alpha schemas may still change with an explicit version bump.
 
-## 0.1.0-alpha.1 - unreleased
+## Unreleased
+
+- Renamed the project, executable, namespaces, schemas, scripts, and release artifacts from BindWitness (`bindwitness`) to PortCVE (`portcve`); no behavior changed as part of the rename.
+
+## 0.1.0-alpha.1 - 2026-08-09
 
 - Native Windows TCP/UDP endpoint collection with IPv4 and IPv6 ownership
 - Process, parent, account, and Windows service attribution

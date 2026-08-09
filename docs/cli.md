@@ -1,27 +1,27 @@
 # CLI reference
 
-BindWitness is read-only. Commands observe local Windows state, write JSON or a lockfile when requested, and never kill a process, close a socket, edit firewall policy, or probe a remote host.
+PortCVE is read-only. Commands observe local Windows state, write JSON or a lockfile when requested, and never kill a process, close a socket, edit firewall policy, or probe a remote host.
 
 ## Commands
 
 ```text
-bindwitness                              List all collected TCP listeners and UDP binds
-bindwitness <port>                       Inspect TCP and UDP binds on a port
-bindwitness <tcp|udp>:<port>             Inspect one protocol on a port
-bindwitness list                         List and filter current endpoints
-bindwitness snapshot [--output <path>]   Emit a versioned snapshot
-bindwitness lock [--output <path>]       Write a normalized baseline
-bindwitness diff <lockfile>              Show current drift from a baseline
-bindwitness check <lockfile>             Gate security-relevant drift
-bindwitness watch                        Poll and report endpoint changes
-bindwitness doctor                       Report collector coverage
-bindwitness help                         Show the concise built-in reference
-bindwitness version                      Print the tool version
+portcve                              List all collected TCP listeners and UDP binds
+portcve <port>                       Inspect TCP and UDP binds on a port
+portcve <tcp|udp>:<port>             Inspect one protocol on a port
+portcve list                         List and filter current endpoints
+portcve snapshot [--output <path>]   Emit a versioned snapshot
+portcve lock [--output <path>]       Write a normalized baseline
+portcve diff <lockfile>              Show current drift from a baseline
+portcve check <lockfile>             Gate security-relevant drift
+portcve watch                        Poll and report endpoint changes
+portcve doctor                       Report collector coverage
+portcve help                         Show the concise built-in reference
+portcve version                      Print the tool version
 ```
 
 Direct inspection and `doctor` collect Windows Firewall evidence unless `--no-firewall` is supplied. `list`, `snapshot`, `lock`, and `watch` skip that slower collector unless `--firewall` is supplied.
 
-Every live collection also performs a bounded probe of the local Docker Engine named pipe (`\\.\pipe\docker_engine`). When Docker is running, BindWitness reads running-container published ports and correlates them to observed Windows endpoints by protocol, host address, and host port. The result is medium-confidence runtime correlation, not direct guest-process ownership. An absent pipe is recorded as `docker: unavailable` and returns quickly without starting Docker Desktop, pulling an image, or starting a container. There is no Docker enablement flag.
+Every live collection also performs a bounded probe of the local Docker Engine named pipe (`\\.\pipe\docker_engine`). When Docker is running, PortCVE reads running-container published ports and correlates them to observed Windows endpoints by protocol, host address, and host port. The result is medium-confidence runtime correlation, not direct guest-process ownership. An absent pipe is recorded as `docker: unavailable` and returns quickly without starting Docker Desktop, pulling an image, or starting a container. There is no Docker enablement flag.
 
 ## Filters and collection
 
