@@ -1,5 +1,6 @@
 using PortCVE.Cli;
 using PortCVE.Domain;
+using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Tests;
 
@@ -86,5 +87,56 @@ public sealed class CliParserTests
         Assert.True(result.ResolveAccounts);
         Assert.True(result.IncludeUdp);
         Assert.True(result.AllowIncomplete);
+    }
+
+    [Fact]
+    public void Parse_ScanExactTcpSubjectAndPolicyFlags_AreWired()
+    {
+        var result = CliParser.Parse(
+            ["scan", "tcp:8080", "--sbom", "fixture.cdx.json", "--fail-on", "high", "--strict", "--json"]);
+
+        Assert.Equal(CommandKind.Scan, result.Command);
+        Assert.Equal(8080, result.Port);
+        Assert.Equal(TransportProtocol.Tcp, result.Protocol);
+        Assert.Equal("fixture.cdx.json", result.SbomPath);
+        Assert.Equal(VulnerabilitySeverity.High, result.FailOn);
+        Assert.True(result.Strict);
+        Assert.True(result.Json);
+        Assert.False(result.IncludeFirewall);
+    }
+
+    [Fact]
+    public void Parse_ScanAll_IsTcpOnly()
+    {
+        var result = CliParser.Parse(["scan", "--all"]);
+
+        Assert.True(result.All);
+        Assert.Equal(TransportProtocol.Tcp, result.Protocol);
+    }
+
+    [Theory]
+    [InlineData("scan")]
+    [InlineData("scan", "udp:53")]
+    [InlineData("scan", "tcp:443", "--all")]
+    [InlineData("scan", "--all", "--sbom", "fixture.json")]
+    [InlineData("scan", "tcp:443", "--firewall")]
+    [InlineData("scan", "tcp:443", "--force")]
+    [InlineData("scan", "tcp:443", "--allow-incomplete")]
+    [InlineData("list", "--fail-on", "high")]
+    public void Parse_InvalidScanCombinations_AreRejected(params string[] arguments)
+    {
+        Assert.Throws<CliUsageException>(() => CliParser.Parse(arguments));
+    }
+
+    [Theory]
+    [InlineData("low")]
+    [InlineData("medium")]
+    [InlineData("unknown")]
+    public void Parse_FailOnAcceptsOnlyHighOrCritical(string severity)
+    {
+        var error = Assert.Throws<CliUsageException>(() =>
+            CliParser.Parse(["scan", "tcp:443", "--fail-on", severity]));
+
+        Assert.Contains("high or critical", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

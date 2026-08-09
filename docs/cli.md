@@ -13,6 +13,8 @@ portcve snapshot [--output <path>]   Emit a versioned snapshot
 portcve lock [--output <path>]       Write a normalized baseline
 portcve diff <lockfile>              Show current drift from a baseline
 portcve check <lockfile>             Gate security-relevant drift
+portcve scan <tcp:port>              Check exact subjects for one TCP listener
+portcve scan --all                   Check exact Docker image IDs for all TCP listeners
 portcve watch                        Poll and report endpoint changes
 portcve doctor                       Report collector coverage
 portcve help                         Show the concise built-in reference
@@ -22,6 +24,22 @@ portcve version                      Print the tool version
 Direct inspection and `doctor` collect Windows Firewall evidence unless `--no-firewall` is supplied. `list`, `snapshot`, `lock`, and `watch` skip that slower collector unless `--firewall` is supplied.
 
 Every live collection also performs a bounded probe of the local Docker Engine named pipe (`\\.\pipe\docker_engine`). When Docker is running, PortCVE reads running-container published ports and correlates them to observed Windows endpoints by protocol, host address, and host port. The result is medium-confidence runtime correlation, not direct guest-process ownership. An absent pipe is recorded as `docker: unavailable` and returns quickly without starting Docker Desktop, pulling an image, or starting a container. There is no Docker enablement flag.
+
+## Offline vulnerability scans
+
+`scan` maps selected TCP listeners only to immutable Docker `sha256:` image IDs. Native Windows process names and paths are not guessed into products or CPEs. For one exact TCP port, `--sbom <path>` adds an explicitly declared local SBOM subject; it cannot be combined with `--all`.
+
+The scanner launches a separately installed Trivy executable without a shell, selects the local Docker daemon only, and supplies update, telemetry, version-check, VEX-update, and online dependency-resolution disable flags. It never downloads Trivy or a database. Set `PORTCVE_TRIVY_PATH` for a non-default executable and `PORTCVE_TRIVY_CACHE_DIR` for a non-default cache. The expected database metadata is `<cache>\db\metadata.json`; a missing or invalid database makes the subject unavailable, while a database older than 72 hours makes evidence partial.
+
+| Option | Behavior |
+| --- | --- |
+| `--all` | Select every observed TCP listener and deduplicate exact Docker subjects by immutable image ID. |
+| `--sbom <path>` | Add one explicit SBOM subject to an exact-port scan. The file is hashed before and after scanning; changed input findings are discarded. |
+| `--fail-on high` | Exit `1` for a high or critical known-advisory match. |
+| `--fail-on critical` | Exit `1` for a critical known-advisory match. |
+| `--strict` | Exit `3` if any selected subject is unsupported, unavailable, failed, or partial. |
+
+Human output and vulnerability JSON say `known_advisory_match`: they do not claim the package is reachable or exploitable. JSON uses `schema/portcve.vulnerability.v1.schema.json` and is redacted unless `--include-private` is supplied. If Trivy cannot run or no subject produces scan evidence, `scan` exits `3`; a selector with no matching TCP listener exits `1`.
 
 ## Filters and collection
 
@@ -81,7 +99,7 @@ Watch is TCP-only unless `--include-udp` or a UDP protocol filter is supplied. I
 | `0` | Success, matching inspection, or passing check. An empty unfiltered list is still successful. |
 | `1` | No matching inspected endpoint or a failed security drift check. |
 | `2` | Invalid usage, schema, lockfile, or non-overwrite request. |
-| `3` | Evidence is incomplete for the requested strict or gating operation. |
+| `3` | Evidence is incomplete for the requested strict or gating operation, or no vulnerability subject could be scanned. |
 | `4` | Required collection or runtime operation failed. |
 | `130` | Interrupted. |
 

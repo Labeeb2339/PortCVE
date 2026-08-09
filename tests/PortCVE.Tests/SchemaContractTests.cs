@@ -2,6 +2,7 @@ using System.Text.Json;
 using PortCVE.Domain;
 using PortCVE.Output;
 using PortCVE.Snapshots;
+using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Tests;
 
@@ -34,6 +35,19 @@ public sealed class SchemaContractTests
         AssertSerializedShape(
             JsonOutput.Serialize(SnapshotRedactor.Redact(snapshot)),
             "portcve.snapshot.v1.schema.json");
+    }
+
+    [Fact]
+    public void PrivateAndRedactedVulnerabilityReportShapesMatchPublishedSchema()
+    {
+        var report = VulnerabilityReportFixture();
+
+        AssertSerializedShape(
+            JsonOutput.Serialize(report),
+            "portcve.vulnerability.v1.schema.json");
+        AssertSerializedShape(
+            JsonOutput.Serialize(VulnerabilityReportRedactor.Redact(report)),
+            "portcve.vulnerability.v1.schema.json");
     }
 
     private static void AssertSerializedShape(string json, string schemaFile)
@@ -201,5 +215,70 @@ public sealed class SchemaContractTests
             [networkInterface],
             [listener],
             []);
+    }
+
+    private static VulnerabilityReport VulnerabilityReportFixture()
+    {
+        var diagnostic = new VulnerabilityDiagnostic(
+            "trivy",
+            VulnerabilityProviderStatus.Partial,
+            "vulnerability_db_stale",
+            "Fixture database is stale.");
+        return new(
+            1,
+            "test",
+            DateTimeOffset.UnixEpoch,
+            "tcp:8080",
+            [
+                new(
+                    "subject-001",
+                    VulnerabilitySubjectKind.ContainerImage,
+                    "example/web:1",
+                    $"sha256:{new string('a', 64)}",
+                    new string('a', 64),
+                    VulnerabilityIdentityConfidence.Exact,
+                    [
+                        new(
+                            "tcp/ipv4/0.0.0.0/8080",
+                            TransportProtocol.Tcp,
+                            IpFamily.Ipv4,
+                            BindScope.Wildcard,
+                            8080),
+                    ],
+                    VulnerabilityScanStatus.Partial,
+                    ["Fixture limitation."]),
+            ],
+            [
+                new(
+                    "trivy",
+                    "0.66.0",
+                    DateTimeOffset.UnixEpoch,
+                    1,
+                    "offline",
+                    VulnerabilityProviderStatus.Partial,
+                    5,
+                    [diagnostic]),
+            ],
+            [
+                new(
+                    "finding-0001",
+                    "subject-001",
+                    "known_advisory_match",
+                    "CVE-2026-0001",
+                    ["VENDOR-1"],
+                    new("alpine", "busybox", "1.0", ["1.1"]),
+                    "vendor_package_version",
+                    VulnerabilityIdentityConfidence.Exact,
+                    VulnerabilitySeverity.High,
+                    "vendor",
+                    VulnerabilityFixState.FixedVersionAvailable,
+                    "not_assessed",
+                    "not_assessed",
+                    "Fixture advisory",
+                    "https://example.invalid/CVE-2026-0001",
+                    ["https://example.invalid/reference"]),
+            ],
+            new(1, 1, 0, 1, 0, 1, false),
+            [diagnostic]);
     }
 }

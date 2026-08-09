@@ -1,5 +1,6 @@
 using System.Globalization;
 using PortCVE.Domain;
+using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Cli;
 
@@ -29,6 +30,9 @@ public static class CliParser
         var includeUdp = false;
         var includePrivate = false;
         var resolveAccounts = false;
+        var all = false;
+        string? sbomPath = null;
+        VulnerabilitySeverity? failOn = null;
         TimeSpan? interval = null;
         int? iterations = null;
         var index = 0;
@@ -49,6 +53,7 @@ public static class CliParser
                 {
                     "list" or "ls" => CommandKind.List,
                     "inspect" or "explain" => CommandKind.Inspect,
+                    "scan" => CommandKind.Scan,
                     "lock" => CommandKind.Lock,
                     "snapshot" => CommandKind.Snapshot,
                     "diff" => CommandKind.Diff,
@@ -120,6 +125,15 @@ public static class CliParser
                 case "--resolve-accounts":
                     resolveAccounts = true;
                     break;
+                case "--all":
+                    all = true;
+                    break;
+                case "--sbom":
+                    sbomPath = RequireValue(arguments, ref index, argument);
+                    break;
+                case "--fail-on":
+                    failOn = ParseVulnerabilitySeverity(RequireValue(arguments, ref index, argument));
+                    break;
                 case "-p" or "--port":
                     port = ParsePort(RequireValue(arguments, ref index, argument));
                     break;
@@ -164,6 +178,18 @@ public static class CliParser
             positionals.RemoveAt(0);
         }
 
+        if (command == CommandKind.Scan && positionals.Count > 0)
+        {
+            if (!TryParseQuery(positionals[0], out var queryProtocol, out var queryPort))
+            {
+                throw new CliUsageException($"'{positionals[0]}' is not a valid TCP port query.");
+            }
+
+            protocol = queryProtocol ?? TransportProtocol.Tcp;
+            port = queryPort;
+            positionals.RemoveAt(0);
+        }
+
         if (command is CommandKind.Diff or CommandKind.Check)
         {
             if (positionals.Count == 0)
@@ -188,6 +214,37 @@ public static class CliParser
         if (command == CommandKind.Inspect && port is null)
         {
             throw new CliUsageException("inspect requires a port, for example: portcve tcp:8080");
+        }
+
+        if (command == CommandKind.Scan)
+        {
+            if (all == (port is not null))
+            {
+                throw new CliUsageException("scan requires exactly one TCP port query or --all.");
+            }
+
+            if (protocol is not null && protocol != TransportProtocol.Tcp)
+            {
+                throw new CliUsageException("scan supports TCP listeners only.");
+            }
+
+            protocol = TransportProtocol.Tcp;
+            if (all && sbomPath is not null)
+            {
+                throw new CliUsageException("--sbom requires an exact TCP port query and cannot be combined with --all.");
+            }
+
+            if (process is not null || scope is not null || firewall || firewallExplicitlyDisabled || evidence || includeUdp
+                || resolveAccounts || output is not null || interval is not null || iterations is not null
+                || force || allowIncomplete)
+            {
+                throw new CliUsageException(
+                    "scan accepts only its TCP selector, --all, --sbom, --fail-on, --json, --include-private, and --strict.");
+            }
+        }
+        else if (all || sbomPath is not null || failOn is not null)
+        {
+            throw new CliUsageException("--all, --sbom, and --fail-on are available only with scan.");
         }
 
         if (command == CommandKind.Lock)
@@ -228,7 +285,10 @@ public static class CliParser
             includePrivate,
             resolveAccounts,
             interval,
-            iterations);
+            iterations,
+            all,
+            sbomPath,
+            failOn);
     }
 
     private static string RequireValue(IReadOnlyList<string> arguments, ref int index, string option)
@@ -326,4 +386,11 @@ public static class CliParser
 
         return result;
     }
+
+    private static VulnerabilitySeverity ParseVulnerabilitySeverity(string value) => value.ToLowerInvariant() switch
+    {
+        "high" => VulnerabilitySeverity.High,
+        "critical" => VulnerabilitySeverity.Critical,
+        _ => throw new CliUsageException("--fail-on must be high or critical."),
+    };
 }

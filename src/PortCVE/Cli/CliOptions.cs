@@ -1,4 +1,5 @@
 using PortCVE.Domain;
+using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Cli;
 
@@ -6,6 +7,7 @@ public enum CommandKind
 {
     List,
     Inspect,
+    Scan,
     Lock,
     Snapshot,
     Diff,
@@ -34,7 +36,10 @@ public sealed record CliOptions(
     bool IncludePrivate = false,
     bool ResolveAccounts = false,
     TimeSpan? Interval = null,
-    int? Iterations = null);
+    int? Iterations = null,
+    bool All = false,
+    string? SbomPath = null,
+    VulnerabilitySeverity? FailOn = null);
 
 public sealed class CliUsageException(string message) : Exception(message);
 

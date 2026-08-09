@@ -5,6 +5,7 @@ using PortCVE.Collection;
 using PortCVE.Domain;
 using PortCVE.Output;
 using PortCVE.Snapshots;
+using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Cli;
 
@@ -12,16 +13,26 @@ public sealed class CliApplication
 {
     private readonly ISnapshotBuilder snapshotBuilder;
     private readonly LockfileService lockfileService;
+    private readonly IVulnerabilityScanner vulnerabilityScanner;
 
     public CliApplication()
-        : this(new SnapshotBuilder(), new LockfileService())
+        : this(new SnapshotBuilder(), new LockfileService(), new TrivyVulnerabilityScanner())
     {
     }
 
     internal CliApplication(ISnapshotBuilder snapshotBuilder, LockfileService lockfileService)
+        : this(snapshotBuilder, lockfileService, new TrivyVulnerabilityScanner())
+    {
+    }
+
+    internal CliApplication(
+        ISnapshotBuilder snapshotBuilder,
+        LockfileService lockfileService,
+        IVulnerabilityScanner vulnerabilityScanner)
     {
         this.snapshotBuilder = snapshotBuilder;
         this.lockfileService = lockfileService;
+        this.vulnerabilityScanner = vulnerabilityScanner;
     }
 
     public async Task<int> RunAsync(
@@ -35,6 +46,7 @@ public sealed class CliApplication
             CommandKind.Help => WriteHelp(output),
             CommandKind.Version => WriteVersion(output),
             CommandKind.List or CommandKind.Inspect => await RunListAsync(options, output, error, cancellationToken),
+            CommandKind.Scan => await RunScanAsync(options, output, error, cancellationToken),
             CommandKind.Lock => await RunLockAsync(options, output, error, cancellationToken),
             CommandKind.Snapshot => await RunSnapshotAsync(options, output, error, cancellationToken),
             CommandKind.Diff or CommandKind.Check => await RunDiffAsync(options, output, error, cancellationToken),
@@ -42,6 +54,105 @@ public sealed class CliApplication
             CommandKind.Doctor => await RunDoctorAsync(options, output, error, cancellationToken),
             _ => throw new CliUsageException("Unsupported command."),
         };
+    }
+
+    private async Task<int> RunScanAsync(
+        CliOptions options,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        string? sbomPath = null;
+        if (options.SbomPath is not null)
+        {
+            try
+            {
+                sbomPath = Path.GetFullPath(options.SbomPath);
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+            {
+                error.WriteLine($"error: invalid SBOM path: {exception.Message}");
+                return ExitCodes.UsageOrSchema;
+            }
+
+            if (!File.Exists(sbomPath))
+            {
+                error.WriteLine($"error: SBOM file not found: '{sbomPath}'.");
+                return ExitCodes.UsageOrSchema;
+            }
+        }
+
+        var snapshot = await snapshotBuilder.CollectAsync(
+            new(IncludeFirewall: false, IncludeProfiles: false),
+            cancellationToken);
+        if (!SocketsAvailable(snapshot))
+        {
+            TextRenderer.RenderDiagnostics(snapshot.Diagnostics, error);
+            return ExitCodes.RuntimeFailure;
+        }
+
+        var selected = snapshot.Listeners
+            .Where(static listener => listener.Protocol == TransportProtocol.Tcp)
+            .Where(listener => options.All || listener.LocalPort == options.Port)
+            .OrderBy(static listener => listener.Key, StringComparer.Ordinal)
+            .ToArray();
+        var selector = options.All ? "all_tcp_listeners" : $"tcp:{options.Port}";
+        var service = new VulnerabilityAssessmentService(vulnerabilityScanner);
+        VulnerabilityReport report;
+        try
+        {
+            report = await service.AssessAsync(
+                Version,
+                selector,
+                selected,
+                selected.Length == 0 ? null : sbomPath,
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            error.WriteLine($"error: could not read the SBOM: {exception.Message}");
+            return ExitCodes.RuntimeFailure;
+        }
+
+        if (options.Json)
+        {
+            var jsonReport = options.IncludePrivate
+                ? report
+                : VulnerabilityReportRedactor.Redact(report);
+            await output.WriteLineAsync(JsonOutput.Serialize(jsonReport));
+        }
+        else
+        {
+            VulnerabilityTextRenderer.Render(report, output, error);
+        }
+
+        if (selected.Length == 0)
+        {
+            if (!options.Json)
+            {
+                error.WriteLine($"error: no TCP listeners matched {selector}.");
+            }
+
+            return ExitCodes.NegativeResult;
+        }
+
+        if (!report.HasSuccessfulScan)
+        {
+            return ExitCodes.IncompleteEvidence;
+        }
+
+        if (options.Strict && !report.Summary.IsComplete)
+        {
+            return ExitCodes.IncompleteEvidence;
+        }
+
+        if (options.FailOn is not null && report.Findings.Any(finding =>
+            MeetsThreshold(finding.Severity, options.FailOn.Value)))
+        {
+            return ExitCodes.NegativeResult;
+        }
+
+        return ExitCodes.Success;
     }
 
     private async Task<int> RunListAsync(
@@ -651,6 +762,15 @@ public sealed class CliApplication
         _ => 0,
     };
 
+    private static bool MeetsThreshold(
+        VulnerabilitySeverity actual,
+        VulnerabilitySeverity threshold) => actual switch
+        {
+            VulnerabilitySeverity.Critical => true,
+            VulnerabilitySeverity.High => threshold == VulnerabilitySeverity.High,
+            _ => false,
+        };
+
     private static bool IsCheckFailure(ListenerChange change) => change.Kind switch
     {
         ListenerChangeKind.Added => true,
@@ -688,6 +808,8 @@ public sealed class CliApplication
         output.WriteLine("  portcve lock -o listeners.lock  Save a normalized, privacy-reduced baseline");
         output.WriteLine("  portcve diff listeners.lock     Show drift from the live machine");
         output.WriteLine("  portcve check listeners.lock    Fail on new, wider, or owner-changed binds");
+        output.WriteLine("  portcve scan tcp:8080           Check an exact listener's Docker image offline");
+        output.WriteLine("  portcve scan --all              Check exact Docker images for all TCP listeners");
         output.WriteLine("  portcve watch --json             Stream endpoint changes as JSONL");
         output.WriteLine("  portcve doctor                  Check collection coverage and privacy mode");
         output.WriteLine();
@@ -704,6 +826,9 @@ public sealed class CliApplication
         output.WriteLine("  --include-udp                       Include UDP binds in lock/watch workflows");
         output.WriteLine("  --allow-incomplete                  Permit a diff-only baseline with weak evidence");
         output.WriteLine("  --strict                            Exit 3 when core evidence is incomplete");
+        output.WriteLine("  --all                               Select every TCP listener for scan");
+        output.WriteLine("  --sbom <path>                       Scan an explicitly supplied local SBOM");
+        output.WriteLine("  --fail-on <high|critical>           Exit 1 when that severity threshold is met");
         output.WriteLine("  -o, --output <path>                 Write lock or snapshot output to a file");
         output.WriteLine("  --force                             Replace an existing output file");
         output.WriteLine("  --interval <duration>               Watch interval, for example 500ms or 2s");
@@ -712,7 +837,8 @@ public sealed class CliApplication
         output.WriteLine("  0 success/pass; 1 no match or policy fail; 2 usage/schema;");
         output.WriteLine("  3 incomplete evidence; 4 collection/runtime failure; 130 interrupted.");
         output.WriteLine();
-        output.WriteLine("PortCVE is read-only and does not prove Internet reachability.");
+        output.WriteLine("PortCVE is read-only and does not prove reachability or exploitability.");
+        output.WriteLine("Vulnerability scans use a preinstalled Trivy database in offline mode; no update is automatic.");
         return ExitCodes.Success;
     }
 

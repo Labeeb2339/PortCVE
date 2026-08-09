@@ -1,0 +1,40 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ArtifactType": "container_image",
+  "Results": [
+    {
+      "Target": "fixture (alpine 3.20)",
+      "Class": "os-pkgs",
+      "Type": "alpine",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-0002",
+          "VendorIDs": ["ALPINE-2026-2", "CVE-2026-0002"],
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.3.0-r0",
+          "FixedVersion": "3.3.0-r1, 3.3.1-r0",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://example.invalid/CVE-2026-0002",
+          "Title": "Fixture critical advisory",
+          "Severity": "CRITICAL",
+          "References": ["https://example.invalid/ref-2", "https://example.invalid/ref-1"]
+        },
+        {
+          "VulnerabilityID": "CVE-2026-0001",
+          "PkgName": "busybox",
+          "InstalledVersion": "1.36.1-r28",
+          "FixedVersion": "",
+          "Severity": "HIGH",
+          "References": []
+        },
+        {
+          "VulnerabilityID": "CVE-2026-INCOMPLETE",
+          "PkgName": "",
+          "InstalledVersion": "1",
+          "Severity": "HIGH"
+        }
+      ]
+    }
+  ]
+}
