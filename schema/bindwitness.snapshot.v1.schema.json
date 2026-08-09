@@ -1,0 +1,518 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bindwitness:schema:snapshot:v1",
+  "title": "BindWitness system snapshot v1",
+  "description": "A point-in-time local endpoint snapshot. The same shape is used for default-redacted and --include-private output; sensitive process, network, firewall, and Docker container/image fields are omitted or replaced in redacted output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool_version",
+    "generated_at",
+    "collection_window_ms",
+    "platform",
+    "collectors",
+    "interfaces",
+    "listeners",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "tool_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "collection_window_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "platform": {
+      "type": "string",
+      "minLength": 1
+    },
+    "collectors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/collector"
+      }
+    },
+    "interfaces": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/network_interface"
+      }
+    },
+    "listeners": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/listener"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
+  },
+  "$defs": {
+    "collector_status": {
+      "enum": [
+        "complete",
+        "partial",
+        "unavailable",
+        "failed"
+      ]
+    },
+    "collector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "observed_at",
+        "duration_ms",
+        "diagnostics"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/collector_status"
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/diagnostic"
+          }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collector",
+        "status",
+        "code",
+        "message"
+      ],
+      "properties": {
+        "collector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/collector_status"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "network_interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "index",
+        "address",
+        "prefix_length",
+        "profile",
+        "is_up"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "A platform interface ID, or the literal redacted in default-redacted output."
+        },
+        "name": {
+          "type": "string",
+          "description": "The local interface name, or a stable interface-N placeholder in default-redacted output."
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "address": {
+          "type": "string",
+          "description": "A local IP address in private output, or loopback/redacted-ipv4/redacted-ipv6/redacted in default-redacted output."
+        },
+        "prefix_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 128
+        },
+        "profile": {
+          "type": "string"
+        },
+        "is_up": {
+          "type": "boolean"
+        }
+      }
+    },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "image_name",
+        "services",
+        "services_are_candidates",
+        "is_complete",
+        "limitations"
+      ],
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": -1,
+          "description": "The observed owning PID in private output; default-redacted snapshots replace it with 0."
+        },
+        "creation_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Present when collected and --include-private is used; omitted from default-redacted output."
+        },
+        "image_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image_path": {
+          "type": "string",
+          "description": "Present only when collected and --include-private is used."
+        },
+        "image_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Present only when binary hashing was requested, succeeded, and private output is enabled."
+        },
+        "parent_pid": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Omitted from default-redacted output."
+        },
+        "parent_image_name": {
+          "type": "string",
+          "description": "Omitted from default-redacted output."
+        },
+        "user_sid": {
+          "type": "string",
+          "description": "Omitted from default-redacted output."
+        },
+        "account_name": {
+          "type": "string",
+          "description": "Only populated when --resolve-accounts succeeds and omitted from default-redacted output. Account resolution can contact Windows domain services."
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "services_are_candidates": {
+          "type": "boolean"
+        },
+        "is_complete": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "firewall_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "action",
+        "profiles",
+        "protocol",
+        "local_port",
+        "local_address",
+        "remote_address",
+        "application",
+        "service",
+        "unsupported_constraints"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "local_port": {
+          "type": "string"
+        },
+        "local_address": {
+          "type": "string"
+        },
+        "remote_address": {
+          "type": "string"
+        },
+        "application": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "unsupported_constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "host_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "confidence",
+        "summary",
+        "matching_rules",
+        "limitations"
+      ],
+      "properties": {
+        "verdict": {
+          "enum": [
+            "not_evaluated",
+            "allow",
+            "block",
+            "mixed",
+            "unknown",
+            "disabled"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "matching_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/firewall_rule"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "container_exposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A local Docker Engine published-port mapping correlated to an observed Windows endpoint by protocol, host address, and host port. This is medium-confidence tuple correlation, not direct guest-process socket ownership.",
+      "required": [
+        "runtime",
+        "container_id",
+        "container_name",
+        "image",
+        "host_address",
+        "host_port",
+        "container_port",
+        "protocol",
+        "confidence",
+        "limitations"
+      ],
+      "properties": {
+        "runtime": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The local container runtime that declared the publication; currently docker."
+        },
+        "container_id": {
+          "type": "string",
+          "description": "The Engine container ID in private output or the literal redacted in default output."
+        },
+        "container_name": {
+          "type": "string",
+          "description": "The Engine container name in private output or a redacted placeholder in default output."
+        },
+        "image": {
+          "type": "string",
+          "description": "The Engine image reference in private output or a redacted placeholder in default output."
+        },
+        "image_id": {
+          "type": "string",
+          "description": "The Engine image ID when available and --include-private is used; omitted from default-redacted output."
+        },
+        "host_address": {
+          "type": "string",
+          "description": "The published host address in private output or any/loopback/redacted-ipv4/redacted-ipv6/redacted in default output."
+        },
+        "host_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "container_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "protocol": {
+          "enum": [
+            "tcp",
+            "udp"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "description": "Current Docker publication correlation is emitted at medium confidence because it is a tuple join and the Windows socket may be owned by a forwarding process."
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "listener": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "protocol",
+        "family",
+        "local_address",
+        "local_port",
+        "socket_state",
+        "bind_scope",
+        "bind_summary",
+        "owner",
+        "active_on",
+        "host_policy",
+        "evidence",
+        "limitations"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol": {
+          "enum": [
+            "tcp",
+            "udp"
+          ]
+        },
+        "family": {
+          "enum": [
+            "ipv4",
+            "ipv6"
+          ]
+        },
+        "local_address": {
+          "type": "string",
+          "description": "A local IP address in private output or a normalized scope token in default-redacted output."
+        },
+        "local_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "socket_state": {
+          "type": "string",
+          "description": "TCP state or BOUND for a UDP endpoint."
+        },
+        "bind_scope": {
+          "enum": [
+            "loopback",
+            "interface",
+            "wildcard",
+            "unknown"
+          ]
+        },
+        "bind_summary": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/owner"
+        },
+        "active_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/network_interface"
+          }
+        },
+        "host_policy": {
+          "$ref": "#/$defs/host_policy"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Empty in default-redacted output; populated when private evidence is included."
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "container_exposures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/container_exposure"
+          },
+          "description": "Local Docker Engine published-port mappings correlated to this observed host endpoint by protocol, host address, and host port. Omitted when no mapping was correlated; unmatched Engine publications remain diagnostics and do not create listeners."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bindwitness:schema:lock:v1",
+  "title": "BindWitness listener lockfile v1",
+  "description": "A deterministic, normalized, privacy-reduced baseline of local endpoints. Volatile process data and raw private process/container evidence are not stored, but normalized owner identities, including image-set hashes, can still fingerprint installed or running software.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "created_by",
+    "includes_udp",
+    "selector",
+    "evidence",
+    "listeners"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "created_by": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The BindWitness tool and version that wrote the lockfile."
+    },
+    "includes_udp": {
+      "type": "boolean",
+      "description": "Whether UDP binds are part of this baseline and must be included in later diff/check collection."
+    },
+    "selector": {
+      "$ref": "#/$defs/selector"
+    },
+    "evidence": {
+      "$ref": "#/$defs/evidence"
+    },
+    "listeners": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/listener"
+      }
+    }
+  },
+  "$defs": {
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The port/protocol selector captured with the baseline. Null selector members are omitted. Schema v1 does not accept process or scope selectors.",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "protocol": {
+          "enum": [
+            "tcp",
+            "udp"
+          ]
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ownership",
+        "bind_scope",
+        "host_policy",
+        "containers"
+      ],
+      "properties": {
+        "ownership": {
+          "$ref": "#/$defs/evidence_completeness"
+        },
+        "bind_scope": {
+          "$ref": "#/$defs/evidence_completeness"
+        },
+        "host_policy": {
+          "$ref": "#/$defs/evidence_completeness"
+        },
+        "containers": {
+          "$ref": "#/$defs/evidence_completeness",
+          "description": "Docker publication evidence used for this baseline: complete when the local Engine answered, partial after access denial, timeout, invalid response, or API failure, or not_collected when the optional local Docker pipe was absent."
+        }
+      }
+    },
+    "evidence_completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "not_collected"
+      ]
+    },
+    "listener": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "protocol",
+        "family",
+        "address",
+        "port",
+        "scope",
+        "owner_identity",
+        "owner_identity_strength",
+        "host_policy_confidence",
+        "host_policy"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical protocol/family/address-token/port identity."
+        },
+        "protocol": {
+          "enum": [
+            "tcp",
+            "udp"
+          ]
+        },
+        "family": {
+          "enum": [
+            "ipv4",
+            "ipv6"
+          ]
+        },
+        "address": {
+          "enum": [
+            "loopback",
+            "any",
+            "interface",
+            "unknown"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "scope": {
+          "enum": [
+            "loopback",
+            "interface",
+            "wildcard",
+            "unknown"
+          ]
+        },
+        "owner_identity": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Normalized owner identity, for example a binary SHA-256, deterministic Docker image-set SHA-256, service, kernel, process-name, or unknown identity. Container IDs, names, and raw image references are never stored here."
+        },
+        "owner_identity_strength": {
+          "enum": [
+            "sha256",
+            "container_image",
+            "service",
+            "kernel",
+            "name_only",
+            "unknown"
+          ],
+          "description": "container_image means owner_identity is the hash of the sorted distinct Docker image-ID set correlated to this host endpoint, not direct proof of guest-process ownership."
+        },
+        "host_policy_confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "host_policy": {
+          "enum": [
+            "not_evaluated",
+            "allow",
+            "block",
+            "mixed",
+            "unknown",
+            "disabled"
+          ],
+          "description": "A static Windows Firewall policy assessment, not a packet-path or external-reachability result."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore BindWitness.sln --locked-mode
+
+      - name: Verify formatting
+        run: dotnet format BindWitness.sln --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build BindWitness.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test BindWitness.sln -c Release --no-build --logger "trx;LogFileName=tests.trx" --collect "XPlat Code Coverage" --results-directory TestResults
+
+      - name: Publish Windows x64
+        run: dotnet publish src/BindWitness/BindWitness.csproj -c Release -r win-x64 --self-contained true --no-build -o artifacts/win-x64
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          ./artifacts/win-x64/bindwitness.exe --version
+          $json = ./artifacts/win-x64/bindwitness.exe snapshot --no-firewall 2>$null | ConvertFrom-Json
+          if ($json.schema_version -ne 1) { throw 'Unexpected snapshot schema.' }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/
+
+      - name: Upload smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindwitness-win-x64
+          path: artifacts/win-x64/bindwitness.exe
