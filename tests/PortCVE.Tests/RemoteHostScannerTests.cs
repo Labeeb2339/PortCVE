@@ -712,11 +712,15 @@ public sealed class RemoteHostScannerTests
             new RecordingDnsResolver(IPAddress.Loopback),
             NoConventionalProbes(),
             _ => limiter);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var cancellation = new CancellationTokenSource();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => scanner.ScanAsync(
+        var scan = scanner.ScanAsync(
             Options("cancel.test", 9),
-            cancellation.Token));
+            cancellation.Token);
+        await limiter.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await scan);
         Assert.Equal(1, limiter.WaitCount);
     }
 
@@ -1123,12 +1127,17 @@ public sealed class RemoteHostScannerTests
     private sealed class BlockingRateLimiter : IRemoteConnectionRateLimiter
     {
         private int waitCount;
+        private readonly TaskCompletionSource entered = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int WaitCount => Volatile.Read(ref waitCount);
+
+        public Task Entered => entered.Task;
 
         public async ValueTask WaitAsync(CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref waitCount);
+            entered.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
     }
