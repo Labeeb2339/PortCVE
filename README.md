@@ -1,294 +1,185 @@
 # PortCVE
 
-**Audit local listeners. Fingerprint authorized remote services. Correlate evidence to CVEs.**
+[![CI](https://github.com/Labeeb2339/PortCVE/actions/workflows/ci.yml/badge.svg)](https://github.com/Labeeb2339/PortCVE/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Labeeb2339/PortCVE/actions/workflows/codeql.yml/badge.svg)](https://github.com/Labeeb2339/PortCVE/actions/workflows/codeql.yml)
 
-PortCVE is a non-destructive Windows CLI that connects the facts other port tools leave separate:
+PortCVE is a Windows CLI for answering four practical questions:
 
-- which TCP listeners and UDP endpoints exist;
-- which process or Windows service owns each bind;
-- which local Docker Engine publication maps a container port to that observed host bind;
-- which known vulnerability advisories match packages in an exactly identified local Docker image or explicitly supplied SBOM;
-- which TCP services are reachable on an explicitly authorized host or IPv4 CIDR, with bounded HTTP/TLS/greeting evidence;
-- which strong remote product/version fingerprints map to direct, conditional, or inconclusive NVD CVE candidates;
-- how to normalize existing Nmap XML and Nuclei JSONL evidence without executing either scanner;
-- whether the bind is loopback-only, interface-specific, or wildcard;
-- which active interfaces and network profiles it covers;
-- what a static evaluation of the merged Windows Firewall policy suggests; and
-- whether that local attack surface changed since a trusted baseline.
+1. What is listening?
+2. Which process, service, or container owns it?
+3. Has the local attack surface changed?
+4. Do identified packages or authorized remote service fingerprints match known CVEs?
 
-PortCVE does not call a wildcard bind “Internet exposed” or an advisory match “exploitable.” It reports observed host facts, known-advisory evidence, confidence, and limitations separately.
+The current version is `0.2.0-alpha.1`. Windows x64 is the only supported target. There is no signed PortCVE release yet, so current users must build from source.
 
-> Status: `0.2.0-alpha.1` under development. Windows x64 is the only supported release target today. The CLI and JSON schemas can still change before `1.0`.
->
-> Naming status: **PortCVE is the current project and CLI name.** The `v0.1.0-alpha.1` release was originally published as **BindWitness**; that historical artifact remains a BindWitness build. Exact PortCVE name checks on 2026-08-09 found no repository or package collision across GitHub, PyPI, npm, crates.io, or NuGet. This screening is not formal trademark clearance.
+## Features
 
-## Why this exists
+- Lists native IPv4/IPv6 TCP listeners and UDP endpoints.
+- Maps binds to processes, Windows services, interfaces, network profiles, and static Windows Firewall rules.
+- Correlates Docker published ports with observed host binds.
+- Creates reviewable listener baselines and fails CI when exposure widens or ownership changes.
+- Uses a local Trivy database to check exact Docker images or an explicitly supplied SBOM.
+- Fingerprints TCP services on hosts or IPv4 CIDRs you are authorized to assess.
+- Maps a small reviewed set of strong service banners to NVD CVE candidates.
+- Imports existing Nmap XML and Nuclei JSONL without launching either scanner.
+- Emits text, versioned JSON, JSONL, and stable exit codes for automation.
 
-`netstat`, TCPView, and PowerShell can show sockets and owners. PortCVE is for the next question:
+PortCVE is not an exploit framework. It does not brute-force credentials, send exploit payloads, close ports, edit firewall rules, or claim that a CVE match is exploitable.
 
-> What opened this port, where can it receive traffic, what does the host firewall say, do its exact packages match known advisories, and is this new?
+## Build from source
 
-It is designed for developers, defenders, incident responders, authorized pentesters, lab machines, and Windows hardening checks. Remote assessment is explicit, rate-limited, non-authenticated, and non-destructive; PortCVE is not an exploit framework.
-
-## Quick demo
-
-Illustrative Docker-published port:
-
-```text
-PS> portcve tcp:8080 --evidence
-
-TCP4  0.0.0.0:8080  LISTEN
-
-OWNER
-  Process      com.docker.backend.exe  pid 6840
-  Binary       C:\Program Files\Docker\Docker\resources\com.docker.backend.exe
-  User         S-1-5-21-...
-
-CONTAINER PUBLICATION
-  Container    web  (docker)
-  Image        example/web:1.0
-  Mapping      0.0.0.0:8080 -> 80/tcp
-  Confidence   medium
-
-BIND
-  Scope        all IPv4 interfaces
-  Active on    Wi-Fi  192.168.1.42/24  (Private)
-
-HOST POLICY
-  STATIC ALLOW A matching explicit inbound allow rule was observed; static host policy indicates allow.
-  Confidence   medium
-
-REACHABILITY
-  Local socket LISTENING - application acceptance was not tested
-  LAN/routed   STATIC HOST POLICY INDICATES ALLOW - packet path not tested
-  Internet     UNKNOWN - router, NAT, cloud controls, and the remote path were not tested
-
-LIMITATIONS
-  - Docker Engine publication was correlated by protocol, host address, and host port;
-    the host socket may be owned by a Docker Desktop forwarding process.
-```
-
-PortCVE reads published-port metadata from the local Docker Engine named pipe and attaches it only when protocol, host address, and host port match an observed Windows endpoint. That tuple join is useful but intentionally reported with medium confidence; it is not direct proof of guest-process socket ownership.
-
-### Live Docker validation
-
-The integrated path was exercised on 2026-08-09 using Windows NT `10.0.26200.0`, Docker Desktop client/server `28.3.2`, and the `desktop-linux` WSL2 context. An official `alpine:3.22` fixture (`sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce`) published TCP `127.0.0.1:64458 -> 8080` and UDP `0.0.0.0:51731 -> 5353`; both returned real echo payloads. An independent Windows CIM check saw those exact host tuples owned by PID `30176`, while the then-named BindWitness build kept the observed owner `com.docker.backend.exe` and attached both container publications with the Docker collector `complete`.
-
-A container-aware lock recorded `evidence.containers: complete` and `owner_identity_strength: container_image`; an unchanged `check` passed. Replacing the same TCP host endpoint with PowerShell produced exit code `1` and `owner_changed`. This validates local Docker collection, tuple correlation, and baseline drift behavior on that environment. It does **not** prove external reachability, guest-process socket ownership, broader Docker-version compatibility, or Linux host support.
-
-After building Release, the check is reproducible with:
+Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), then run:
 
 ```powershell
-.\scripts\Test-DockerIntegration.ps1 -ValidateLockCheck
-```
-
-The script is intentionally mutating: it may pull `alpine:3.22`, creates and removes one uniquely labeled container, and publishes temporary echo ports. Its safe default binds both host ports to loopback. Add `-AllowWildcardUdp` only to exercise wildcard bind classification; that briefly publishes the UDP echo fixture on `0.0.0.0`, so it may be reachable from the local network until the guarded cleanup completes.
-
-The reachability wording is intentional. `STATIC ALLOW` and `STATIC BLOCK` summarize a static assessment of Windows Firewall configuration; they are not results from the Windows Filtering Platform packet-classification path. A local socket table and firewall rules cannot prove what a third-party WFP filter, IPsec negotiation, router, cloud security group, VPN, or remote host will do.
-
-### Live vulnerability validation
-
-The offline scan path was exercised on 2026-08-09 with official Trivy `v0.73.0`, an isolated schema-2 database, and the immutable local Docker image ID `sha256:c4d56c24da4f009ecf8352146b43497fe78953edb4c679b841732beb97e588b0` (Alpine 3.22.1). PortCVE reported 87 known-advisory matches: 3 critical, 17 high, 26 medium, and 41 low. A fresh strict scan returned `0`; `--fail-on high` and `--fail-on critical` returned `1`; missing and 96-hour-stale databases returned `3` without converting incomplete evidence into a clean result.
-
-The same run validated default/private redaction, Draft 2020-12 schema conformance, hostile inherited `TRIVY_*` scrubbing, zero image pulls, and per-scan temp cleanup. These results prove the tested local correlation, parsing, policy, and exit-code paths—not that every finding is reachable or exploitable. Exact hashes, representative findings, and claim boundaries are recorded in [docs/validation.md](docs/validation.md).
-
-### Live remote validation
-
-The authorized remote path was exercised on 2026-08-09 against disposable listeners bound only to `127.0.0.1`. PortCVE observed OpenSSH `9.6p1` and a silent Apache HTTP Server `2.4.58` fixture on two OS-assigned high ports. Discovery sent zero bytes to the unknown HTTP service and did not guess its identity. `--active` then identified it through exactly one fresh `HEAD /` request with evidence source `active-adaptive-http-head`; no other method or path was observed. Default/private redaction, schema-compatible output, timeouts, process cleanup, listener cleanup, and temporary-file cleanup passed.
-
-This proves the tested loopback discovery and adaptive-HTTP path—not authorization for another target, external reachability, adaptive TLS, CVE applicability, or exploitability. The reproducible harness and exact claim boundary are in [docs/remote-live-validation.md](docs/remote-live-validation.md).
-
-## Install
-
-### Signed installer
-
-For finalized signed releases, download, checksum, Authenticode-verify, inspect, and run the release's file-backed `install.ps1`. It refuses piped or in-memory execution, verifies its own signer before network or filesystem activity, installs without administrator rights to `%LOCALAPPDATA%\Programs\PortCVE`, verifies the versioned ZIP and signed executable, keeps a verified signed installer copy for maintenance, and updates the user `PATH` transactionally. Running the installed signed file again updates PortCVE; `-Version <tag>` selects an exact signed release; and `-Uninstall` removes only a receipt-bound installation and its exact user `PATH` entry without making a network request. See the complete [install, update, rollback, uninstall, and trust instructions](docs/install.md).
-
-The checked-in `scripts/install.ps1` is an unsigned, unfinalized template and deliberately refuses to run. Production installation requires the separately downloaded and signed release asset; pipe-to-execution installation is refused.
-
-The installer never permits an unsigned production install. The historical `v0.1.0-alpha.1` BindWitness-era release is unsigned and is intentionally rejected.
-
-> Availability: no finalized signed PortCVE release exists yet. Current users must build from source; the managed installer and portable signed-release commands apply only after the first verified signed release is published.
-
-### Portable release ZIP
-
-Download `portcve-<tag>-win-x64.zip` from [PortCVE Releases](https://github.com/Labeeb2339/PortCVE/releases), verify its exact entry in `SHA256SUMS.txt`, extract it, and verify the embedded `portcve.exe` Authenticode signature before use. The portable ZIP does not change `PATH` and has no managed update or uninstall state.
-
-Release binaries are self-contained; the .NET runtime is not required. Do not treat a checksum alone as a substitute for the required signature on finalized releases.
-
-After installation, follow the concise [daily-use workflow](docs/daily-use.md) for readiness checks, baselines, authorized assessments, and evidence handling.
-
-### Build from source
-
-Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), then:
-
-```powershell
-cd portcve
+git clone https://github.com/Labeeb2339/PortCVE.git
+cd PortCVE
 dotnet restore PortCVE.sln --locked-mode
 dotnet test PortCVE.sln -c Release --no-restore
-dotnet publish src\PortCVE\PortCVE.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts\win-x64
+dotnet publish src\PortCVE\PortCVE.csproj `
+    -c Release -r win-x64 --self-contained true --no-restore `
+    -o artifacts\win-x64
 ```
 
-## Commands
+Start with:
 
 ```powershell
-portcve                              # fast local inventory
-portcve 8080                         # explain TCP and UDP binds on a port
-portcve tcp:8080 --evidence          # protocol-specific deep explanation
-portcve list --scope non-loopback    # filter likely remote-facing binds
-portcve list --process node.exe      # filter by process or service
-portcve snapshot --json              # full versioned evidence document
-portcve scan tcp:8080 --strict        # offline advisory matches for one exact listener
-portcve scan --all --fail-on high     # deduplicated Docker-image scan and CI gate
-portcve scan-host 10.0.0.5 --authorized  # bounded remote TCP discovery and fingerprinting
-portcve scan-host app.test --ports 22,443 --authorized --online-advisories
-portcve import nmap .\scan.xml        # normalize existing Nmap XML evidence
-portcve import nuclei .\findings.jsonl # normalize existing Nuclei JSONL evidence
-portcve lock -o listeners.lock.json  # normalized baseline, no PID or raw args
-portcve lock --include-udp            # opt into noisier UDP baseline tracking
-portcve diff listeners.lock.json     # report all current drift
-portcve check listeners.lock.json    # CI-friendly security drift gate
-portcve watch --json                 # stream changes as JSONL
-portcve doctor                       # collection coverage and privacy mode
+.\artifacts\win-x64\portcve.exe version
+.\artifacts\win-x64\portcve.exe doctor
+.\artifacts\win-x64\portcve.exe list
 ```
 
-Direct port inspection collects Windows Firewall evidence by default. Fast inventory, lock, and watch do not; add `--firewall` when you need policy correlation and accept the extra collection time.
+Administrator rights are not required for basic inventory. Protected processes and some firewall or owner details may remain unavailable; `doctor` reports those gaps.
 
-Run `portcve help` for the concise built-in reference. The complete option behavior, including privacy and baseline flags, is documented in [docs/cli.md](docs/cli.md).
+## Common workflows
 
-## Baseline workflow
+### Inspect local listeners
 
-Create a baseline when the machine is in a known-good state:
+```powershell
+portcve list
+portcve list --scope non-loopback
+portcve tcp:8080 --evidence
+```
+
+Firewall conclusions describe the Windows policy PortCVE could read. They do not prove LAN or Internet reachability.
+
+### Track drift
+
+Create a baseline after reviewing the machine as known-good:
 
 ```powershell
 portcve lock -o listeners.lock.json
-```
-
-Lockfiles are TCP-only by default. Use `--include-udp` only when UDP bind drift matters to the review. UDP is connectionless, duplicate/reused binds are valid, and short-lived endpoints can create substantially more baseline churn. The `includes_udp` choice is stored in the lockfile and reused by later `diff` and `check` runs.
-
-Review all drift:
-
-```powershell
 portcve diff listeners.lock.json
+portcve check listeners.lock.json --strict
 ```
 
-Gate a build, image, kiosk, or lab host:
+`check` fails on new listeners, owner changes, wider binds, or more-permissive host-policy results. Incomplete evidence returns exit code `3` rather than a clean pass.
+
+If baseline creation is blocked only by protected processes with readable image names, `lock --allow-weak-owner` stores an explicit name-only policy. This is weaker than a hash or exact service identity and cannot detect a different binary using the same filename; unknown owners still prevent a pass.
+
+### Check known advisories
+
+PortCVE uses Trivy as an optional external scanner. Install Trivy separately, verify its published checksum, set `PORTCVE_TRIVY_PATH`, and initialize a dedicated local cache:
 
 ```powershell
-portcve check listeners.lock.json
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+portcve db update
+portcve db status
+portcve scan tcp:8080 --strict
+portcve scan --all --fail-on high
 ```
 
-`check` fails on a new endpoint, owner change, wider bind, or more-permissive host-policy assessment. Removed endpoints and narrower binds remain visible in `diff` but do not fail the security gate.
+`--all` scans each distinct Docker image ID mapped to a TCP listener. It does not guess products for unrelated native Windows listeners; if no scan-capable image is present, the command returns exit code `3`.
 
-Lockfiles are deterministic and privacy-reduced. They omit PIDs, timestamps, command lines, environment variables, usernames, and full executable paths, but still reveal ports, protocols, bind scopes, owner identities such as process or service names or hashes, and policy metadata. Review a lockfile before publishing it. Duplicate UDP binds are preserved as a multiset rather than silently collapsed.
+For an explicit CycloneDX or SPDX SBOM:
 
-By default, `lock` refuses to write when ownership, bind-scope, or requested host-policy evidence is incomplete. `--allow-incomplete` overrides that write-time guard for investigation and diff workflows; it does **not** turn incomplete evidence into a passing security gate. `check` returns exit code `3` when its baseline or current evidence cannot support a decision.
+```powershell
+portcve scan tcp:8080 --sbom .\app.cdx.json --strict
+```
 
-Container evidence has its own completeness field. If the local Docker Engine responds, correlated endpoints use a deterministic SHA-256 of the sorted Docker image-ID set as `owner_identity` with strength `container_image` when every correlated publication has an image ID. This avoids container names, IDs, and restart-specific values in the lockfile. If the Docker pipe is absent, container evidence is `not_collected` and normal host-owner identity is used. Access denial, timeout, collector failure, or an Engine publication that cannot be reconciled with the Windows socket table makes requested container evidence `partial`; `lock` then requires `--allow-incomplete`, `diff --strict` returns exit code `3`, and `check` cannot pass until comparable evidence is available.
+Local scans do not update the database, pull images, or upload package data. Setup details are in [docs/daily-use.md](docs/daily-use.md).
 
-## Evidence model
+### Assess an authorized host
 
-PortCVE keeps six layers separate:
+Remote scanning only runs when you pass `--authorized`:
 
-1. **Observed bind:** address, port, protocol, owning PID, executable/service, and bind scope.
-2. **Local runtime correlation:** Docker Engine published-port metadata joined to an observed bind by protocol, host address, and host port, always with medium confidence and a tuple-correlation limitation.
-3. **Static host-policy inference:** merged Windows Firewall profiles and matching inbound-rule evidence, with `allow`, `block`, `mixed`, or `unknown` plus confidence and limitations.
-4. **Known-advisory match:** Trivy results for an immutable local Docker image ID or explicit local SBOM, with database identity/freshness and no exploitability claim.
-5. **Authorized remote observation:** a successful TCP connection, protocol greeting, HTTP response, or TLS handshake observed by `scan-host`, with bounded evidence and no exploitability claim.
-6. **Remote advisory candidate:** a strong protocol-banner identity mapped through the verified catalog and NVD configuration evidence. Conditional and inconclusive applicability remain separate from direct candidates.
+```powershell
+portcve scan-host 10.20.30.40 --ports 22,80,443 --authorized
+portcve scan-host 10.20.30.40 --ports 22,80,443 --authorized --active
+```
 
-`UNKNOWN` is a valid result. Missing permissions, unsupported firewall constraints, process churn, WSL, third-party WFP filters, IPsec, and upstream network controls are not converted into false certainty. A Docker publication with no matching Windows endpoint remains a diagnostic and never becomes a synthetic listener.
+Online NVD enrichment is separate and opt-in:
 
-More detail is in [docs/architecture.md](docs/architecture.md) and [docs/threat-model.md](docs/threat-model.md).
+```powershell
+portcve scan-host 10.20.30.40 --ports 22,443 `
+    --authorized --online-advisories --strict --fail-on high
+```
 
-### Native, Docker, and CIM evidence
+`--authorized` records the operator's assertion; PortCVE cannot verify permission. Connections and probes can appear in server, firewall, IDS, and rate-limit logs.
 
-The evidence sources are intentionally identified rather than blended together:
+### Reuse scanner output
 
-- TCP/UDP endpoint ownership comes from native Windows IP Helper tables (`GetExtendedTcpTable` and `GetExtendedUdpTable`). Process paths, timestamps, token SIDs, parent snapshots, and active-service candidates come from native process, token, Toolhelp, and Service Control Manager APIs.
-- Adapter addresses come from local .NET network-interface APIs.
-- Running-container published-port metadata comes from `/version` and the negotiated `/containers/json` endpoint over the local `\\.\pipe\docker_engine` named pipe. It is runtime metadata, not direct socket-owner evidence.
-- Network profile names and Windows Firewall `ActiveStore` rules/filters come from local PowerShell NetSecurity commands that return structured CIM objects.
+```powershell
+portcve import nmap .\scan.xml -o .\scan.portcve.json --strict
+portcve import nuclei .\findings.jsonl -o .\findings.portcve.json --strict
+```
 
-The native socket row is direct point-in-time evidence from the host, although collection races still exist. CIM firewall data is configuration evidence consumed by a conservative static evaluator. It is slower, can degrade independently, and must not be described as a live packet decision.
+The importers are streaming and size-limited. They remove raw response and extracted-value fields, but the normalized report can still contain sensitive assessment metadata.
 
-## Privacy and safety
+## Output and privacy
 
-The default contract is deliberately small:
+Default JSON is privacy-reduced, not anonymous. It removes or aliases PIDs, local paths, interface addresses, account details, container identifiers, and free-form diagnostic text where the command supports reduction. Ports, process or service names, package versions, CVE identifiers, and policy results may remain.
 
-- local host state is read-only—no process killing or firewall changes;
-- local/offline by default—local collection uses OS APIs and, when available, the local Docker Engine named pipe; local vulnerability scans use a separately installed Trivy executable and pre-populated local database with online/update/telemetry paths disabled;
-- no target-process environment-variable reads;
-- no command-line collection;
-- remote connections occur only through `scan-host` after `--authorized`; NVD access additionally requires `--online-advisories`;
-- remote mode has no credentials, brute force, exploit payloads, state-changing requests, crawling, fuzzing, denial-of-service checks, stealth/evasion, or arbitrary template/code execution; and
-- diagnostics go to stderr so JSON stdout remains machine-readable.
+Use `--include-private` only for reports that stay in a controlled location:
 
-Running elevated may reveal more process metadata, but the socket inventory still works for a standard user and reports gaps explicitly.
+```powershell
+portcve snapshot --json -o host.portcve.json
+portcve snapshot --json --include-private -o host.private.portcve.json
+```
 
-JSON list/inspect and `snapshot` output is redacted by default. It replaces interface identities and addresses, replaces the owning PID with `0`, removes process creation time and private owner fields, sanitizes firewall-rule fields, clears free-form evidence, and sanitizes diagnostic details. The schema covers both output modes, so optional private fields are absent unless they were collected and `--include-private` was supplied. Image names, service names, scopes, ports, profile labels, policy results, and collector metadata remain in the default snapshot; treat even redacted snapshots as host metadata. Human-readable inspection is intended for local viewing and can display local paths, SIDs/accounts, PIDs, and interface addresses.
+Review every report before sharing it.
 
-For Docker correlations, default JSON replaces container IDs, container names, and image references, omits image IDs, and normalizes the published host address. It still reveals that a mapping exists, its host and container ports, protocol, runtime, and correlation confidence. `--include-private` permits the collected container identifiers and image references to be serialized. Review either mode before publishing.
+Versioned schemas live in [`schema/`](schema/):
 
-`--resolve-accounts` asks Windows to translate token SIDs into account names. `LookupAccountSid` can consult domain controllers or the global catalog when the answer is not local or cached, so this flag may cause network activity. It is off by default and is separate from `--include-private`: resolution controls collection, while `--include-private` controls whether resolved private values appear in JSON.
+- [snapshot](schema/portcve.snapshot.v1.schema.json)
+- [listener lockfile](schema/portcve.lock.v1.schema.json)
+- [Trivy database status](schema/portcve.database.v1.schema.json)
+- [local vulnerability report](schema/portcve.vulnerability.v1.schema.json)
+- [remote assessment](schema/portcve.remote.v1.schema.json)
+- [external evidence import](schema/portcve.import.v1.schema.json)
 
-## Machine-readable output
+## Install and release status
 
-All JSON uses snake_case, stable enum strings, a mandatory `schema_version`, deterministic ordering, and diagnostics for partial evidence. Schema identifiers are stable URNs; they do not depend on a project website.
+The checked-in `scripts/install.ps1` is a release template, not a bootstrap installer. It refuses to run until the release workflow has finalized and signed it.
 
-- [Snapshot schema v1](schema/portcve.snapshot.v1.schema.json)
-- [Lockfile schema v1](schema/portcve.lock.v1.schema.json)
-- [Trivy database status schema v1](schema/portcve.database.v1.schema.json)
-- [Vulnerability report schema v1](schema/portcve.vulnerability.v1.schema.json)
-- [Remote assessment schema v1](schema/portcve.remote.v1.schema.json)
-- [External evidence import schema v1](schema/portcve.import.v1.schema.json)
+When signed releases become available, the installer will verify its own Authenticode signature, the release checksum, and the signed executable before changing the per-user installation. It supports update, exact-version rollback, and uninstall. See [docs/install.md](docs/install.md).
 
-Human-readable output is not a compatibility API. JSON and lockfile schema changes follow the policy in [docs/versioning.md](docs/versioning.md).
+PortCVE intentionally does not support `irm ... | iex`. Piped script text starts executing before a downloaded file can be inspected and Authenticode-verified.
 
-## Scope
+## Limits
 
-Included now:
+- Alpha CLI and schemas may change before `1.0`.
+- Windows x64 only; no Linux host or WSL guest-process attribution yet.
+- Native Windows software is not assigned a CPE from a filename or port guess.
+- Remote CVE results are candidates based on observed banner data, not proof of applicability or exploitability.
+- Windows Firewall analysis is static configuration review, not live packet-path testing.
+- Dynamic collection can miss short-lived endpoints or lose metadata during process churn.
+The full security model is in [docs/threat-model.md](docs/threat-model.md), and implementation details are in [docs/architecture.md](docs/architecture.md).
 
-- native IPv4/IPv6 TCP listener and UDP endpoint collection;
-- PID, executable, parent process, account SID/name, and active-service attribution;
-- loopback/interface/wildcard classification;
-- active Windows network-profile mapping;
-- local Docker Engine named-pipe collection and medium-confidence published-port correlation;
-- explicit offline Trivy database status and explicit-only database update, plus offline known-advisory matching for immutable local Docker image IDs and explicit local SBOMs with freshness and CI exit gates;
-- authorized TCP host/CIDR discovery with frozen DNS, bounded concurrency/rate/timeouts/evidence, safe HTTP/TLS/greeting probes, and privacy-reduced JSON;
-- conservative explicit-online NVD enrichment for verified catalog-backed remote identities, including conditional applicability;
-- bounded import-only interoperability for Nmap XML and Nuclei JSONL;
-- opt-in static Windows Firewall correlation;
-- list, inspect, local scan, authorized scan-host, import, snapshot, lock, diff, check, watch, and doctor workflows;
-- text, JSON, and JSONL output; and
-- standard-user degradation with explicit diagnostics.
+## Validation
 
-Not included:
+CI runs the test suite on Windows Server 2022 and 2025, builds the self-contained executable, checks formatting, exercises the installer and RFC 3161 verification harnesses, runs an authorized loopback scan, checks performance budgets, and performs CodeQL analysis.
 
-- exploitation, credential attacks, brute force, fuzzing, denial of service, stealth/evasion, or state-changing remote checks;
-- traffic capture or throughput graphs;
-- process termination or automatic firewall changes;
-- a generic “risk score”;
-- proof of LAN or Internet reachability;
-- exploitability proof, automatic remediation, automatic database downloads, or guessed CPEs from process/port names;
-- WSL guest-process or Kubernetes workload attribution; or
-- Linux support yet.
-
-See [ROADMAP.md](ROADMAP.md) for the deliberately staged follow-up work.
+Live Docker, Trivy, corruption-handling, privacy, remote-loopback, and performance results are recorded in [docs/validation.md](docs/validation.md) and [docs/remote-live-validation.md](docs/remote-live-validation.md).
 
 ## Development
 
 ```powershell
 dotnet restore PortCVE.sln --locked-mode
+dotnet format PortCVE.sln --verify-no-changes --no-restore
 dotnet build PortCVE.sln -c Release --no-restore
-dotnet test PortCVE.sln -c Release --no-build
-dotnet run --project src\PortCVE -- doctor
+dotnet test PortCVE.sln -c Release --no-build --no-restore
 ```
 
-Runtime code has no third-party package dependency. Tests use xUnit. Committed NuGet lockfiles make `--locked-mode` fail if dependency resolution drifts. Warnings are treated as errors.
-
-Before contributing, read [CONTRIBUTING.md](CONTRIBUTING.md). Security reports belong in a private GitHub Security Advisory as described in [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Report security issues privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

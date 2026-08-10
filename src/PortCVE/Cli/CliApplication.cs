@@ -256,6 +256,9 @@ public sealed class CliApplication
                 selector,
                 selected,
                 selected.Length == 0 ? null : sbomPath,
+                options.All
+                    ? VulnerabilitySelectionMode.AllScanCapableSubjects
+                    : VulnerabilitySelectionMode.ExactListeners,
                 cancellationToken);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -280,10 +283,14 @@ public sealed class CliApplication
         {
             if (!options.Json)
             {
-                error.WriteLine($"error: no TCP listeners matched {selector}.");
+                error.WriteLine(options.All
+                    ? "error: no scan-capable subjects were found among TCP listeners."
+                    : $"error: no TCP listeners matched {selector}.");
             }
 
-            return ExitCodes.NegativeResult;
+            return options.All
+                ? ExitCodes.IncompleteEvidence
+                : ExitCodes.NegativeResult;
         }
 
         if (!report.HasSuccessfulScan)
@@ -611,12 +618,6 @@ public sealed class CliApplication
             return ExitCodes.RuntimeFailure;
         }
 
-        if (options.Strict && !CoreEvidenceComplete(snapshot))
-        {
-            TextRenderer.RenderDiagnostics(snapshot.Diagnostics, error);
-            return ExitCodes.IncompleteEvidence;
-        }
-
         var lockListeners = ApplyFilters(snapshot.Listeners, options);
         if (!options.IncludeUdp && options.Protocol != TransportProtocol.Udp)
         {
@@ -637,14 +638,23 @@ public sealed class CliApplication
             includesUdp,
             options.IncludeFirewall,
             selector,
-            includesContainerEvidence);
+            includesContainerEvidence,
+            options.AllowWeakOwner);
+        if (options.Strict && !CoreEvidenceCompleteForLock(snapshot, lockfile))
+        {
+            TextRenderer.RenderDiagnostics(snapshot.Diagnostics, error);
+            return ExitCodes.IncompleteEvidence;
+        }
+
         if (!lockfile.IsComplete && !options.AllowIncomplete)
         {
             error.WriteLine("error: refusing to write a baseline with incomplete owner, bind-scope, or requested host-policy evidence.");
             error.WriteLine(
                 $"evidence: ownership={lockfile.Evidence.Ownership}, bind_scope={lockfile.Evidence.BindScope}, "
                 + $"host_policy={lockfile.Evidence.HostPolicy}, containers={lockfile.Evidence.Containers}");
-            error.WriteLine("Run elevated for stronger owner evidence, narrow the filters, or pass --allow-incomplete for a diff-only baseline.");
+            error.WriteLine(
+                "Run elevated for stronger owner evidence, narrow the filters, pass --allow-weak-owner to explicitly accept process-name identity, "
+                + "or pass --allow-incomplete for a diff-only baseline.");
             return ExitCodes.IncompleteEvidence;
         }
         try
@@ -664,12 +674,17 @@ public sealed class CliApplication
                 path = options.IncludePrivate ? Path.GetFullPath(path) : Path.GetFileName(path),
                 listener_count = lockfile.Listeners.Count,
                 schema_version = lockfile.SchemaVersion,
+                allow_weak_owner = lockfile.AllowWeakOwner,
                 evidence = lockfile.Evidence,
             }));
         }
         else
         {
             output.WriteLine($"Wrote {lockfile.Listeners.Count} normalized endpoints to {Path.GetFullPath(path)}.");
+            if (lockfile.AllowWeakOwner)
+            {
+                output.WriteLine("Owner policy: process-name identity is explicitly accepted; unknown owners remain incomplete.");
+            }
         }
 
         TextRenderer.RenderDiagnostics(snapshot.Diagnostics, error);
@@ -744,7 +759,7 @@ public sealed class CliApplication
 
         var baselineUsedFirewall = baseline.Evidence.HostPolicy != EvidenceCompleteness.NotCollected;
         var baselineUsedContainers = baseline.Evidence.Containers != EvidenceCompleteness.NotCollected;
-        var baselineNeedsHashes = baseline.Listeners.Any(static item =>
+        var baselineNeedsHashes = baseline.AllowWeakOwner || baseline.Listeners.Any(static item =>
             item.OwnerIdentityStrength is OwnerIdentityStrength.Sha256 or OwnerIdentityStrength.ContainerImage);
         var snapshot = await snapshotBuilder.CollectAsync(
             new(
@@ -766,7 +781,8 @@ public sealed class CliApplication
             baseline.IncludesUdp,
             baselineUsedFirewall,
             baseline.Selector,
-            baselineUsedContainers);
+            baselineUsedContainers,
+            baseline.AllowWeakOwner);
         var current = currentLockfile.Listeners;
         var changes = ListenerDiffEngine.Compare(baseline.Listeners, current)
             .Concat(ListenerDiffEngine.CompareEvidence(baseline.Evidence, currentLockfile.Evidence))
@@ -784,6 +800,7 @@ public sealed class CliApplication
                 baseline = options.IncludePrivate
                     ? Path.GetFullPath(options.InputPath!)
                     : Path.GetFileName(options.InputPath!),
+                allow_weak_owner = baseline.AllowWeakOwner,
                 changed = changes.Length > 0,
                 changes,
                 diagnostics = jsonDiagnostics,
@@ -791,6 +808,11 @@ public sealed class CliApplication
         }
         else
         {
+            if (baseline.AllowWeakOwner)
+            {
+                output.WriteLine("Owner policy: process-name identity is accepted; unknown owners remain incomplete.");
+            }
+
             TextRenderer.RenderChanges(changes, output);
             TextRenderer.RenderDiagnostics(snapshot.Diagnostics, error);
         }
@@ -799,7 +821,7 @@ public sealed class CliApplication
         {
             if (!baseline.IsComplete || !currentLockfile.IsComplete
                 || changes.Any(static change => change.Kind == ListenerChangeKind.EvidenceRegressed)
-                || (options.Strict && !CoreEvidenceComplete(snapshot)))
+                || (options.Strict && !CoreEvidenceCompleteForLock(snapshot, currentLockfile)))
             {
                 if (!options.Json)
                 {
@@ -825,7 +847,9 @@ public sealed class CliApplication
             if (!options.Json)
             {
                 output.WriteLine();
-                output.WriteLine("PASS: no new, widened, or owner-changed listeners.");
+                output.WriteLine(baseline.AllowWeakOwner
+                    ? "PASS: no new, widened, or owner-changed listeners (stored policy accepts process-name identity)."
+                    : "PASS: no new, widened, or owner-changed listeners.");
             }
         }
 
@@ -834,7 +858,7 @@ public sealed class CliApplication
             && (!baseline.IsComplete
                 || !currentLockfile.IsComplete
                 || changes.Any(static change => change.Kind == ListenerChangeKind.EvidenceRegressed)
-                || !CoreEvidenceComplete(snapshot))
+                || !CoreEvidenceCompleteForLock(snapshot, currentLockfile))
                 ? ExitCodes.IncompleteEvidence
                 : ExitCodes.Success;
     }
@@ -1111,6 +1135,17 @@ public sealed class CliApplication
             .All(static report => report.Status == CollectorStatus.Complete);
     }
 
+    private static bool CoreEvidenceCompleteForLock(SystemSnapshot snapshot, ListenerLockfile lockfile)
+    {
+        return snapshot.Collectors
+            .Where(static report => report.Name != "docker")
+            .All(report => report.Status == CollectorStatus.Complete
+                || (report.Name == "process_owners"
+                    && report.Status == CollectorStatus.Partial
+                    && lockfile.AllowWeakOwner
+                    && lockfile.HasSufficientOwnerEvidence));
+    }
+
     private static IReadOnlyList<ListenerEvidence> WatchListeners(
         IReadOnlyList<ListenerEvidence> listeners,
         CliOptions options)
@@ -1283,7 +1318,7 @@ public sealed class CliApplication
         output.WriteLine("  portcve diff listeners.lock     Show drift from the live machine");
         output.WriteLine("  portcve check listeners.lock    Fail on new, wider, or owner-changed binds");
         output.WriteLine("  portcve scan tcp:8080           Check an exact listener's Docker image offline");
-        output.WriteLine("  portcve scan --all              Check exact Docker images for all TCP listeners");
+        output.WriteLine("  portcve scan --all              Check every mapped Docker image ID");
         output.WriteLine("  portcve db status               Inspect local Trivy and database freshness offline");
         output.WriteLine("  portcve db update               Explicitly download and validate the Trivy vulnerability database");
         output.WriteLine("  portcve scan-host <target> --authorized  Discover and fingerprint authorized TCP services");
@@ -1304,8 +1339,9 @@ public sealed class CliApplication
         output.WriteLine("  --resolve-accounts                  Resolve SIDs; Windows may query domain services");
         output.WriteLine("  --include-udp                       Include UDP binds in lock/watch workflows");
         output.WriteLine("  --allow-incomplete                  Permit a diff-only baseline with weak evidence");
+        output.WriteLine("  --allow-weak-owner                  Create a lock policy accepting process-name identity");
         output.WriteLine("  --strict                            Exit 3 when core evidence is incomplete");
-        output.WriteLine("  --all                               Select every TCP listener for scan");
+        output.WriteLine("  --all                               Scan all mapped Docker image IDs; no guessing");
         output.WriteLine("  --sbom <path>                       Scan an explicitly supplied local SBOM");
         output.WriteLine("  --fail-on <high|critical>           Gate complete advisory evidence; remote use requires --online-advisories");
         output.WriteLine("  --ports <common|all|list/ranges>    Select remote TCP ports for scan-host");

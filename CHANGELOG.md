@@ -16,8 +16,7 @@ All notable changes will be documented here. The project follows semantic versio
 - Added receipt-bound managed update, exact-version rollback, offline uninstall, guarded user-`PATH` changes, and transactional restoration tests; portable release ZIPs remain side-effect free.
 - Added cryptographic RFC 3161 token decoding, signer-info imprint binding, trusted TSA matching, full-SHA GitHub Actions pinning, release checksums, metadata, and provenance attestation.
 - Expanded CI to fresh Windows Server 2022 and 2025 runners with live loopback remote-assessment and enforceable performance budgets, plus local socket-churn and Docker-forwarding validation.
-- Added a daily-use runbook and structured privacy-aware issue and pull-request templates for expert feedback.
-- Live-validated Docker TCP/UDP correlation, the offline vulnerability path, and authorized adaptive HTTP discovery on a random loopback port; see `docs/validation.md` and `docs/remote-live-validation.md` for dated evidence and claim boundaries.
+- Live-validated Docker TCP/UDP correlation, the offline vulnerability path, and authorized adaptive HTTP discovery on a random loopback port; see `docs/validation.md` and `docs/remote-live-validation.md` for the dated results and limits.
 
 ## 0.1.0-alpha.1 - 2026-08-09
 

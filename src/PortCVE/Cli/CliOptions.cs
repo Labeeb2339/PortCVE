@@ -55,7 +55,8 @@ public sealed record CliOptions(
     TimeSpan? ConnectTimeout = null,
     TimeSpan? ReadTimeout = null,
     int? MaximumHosts = null,
-    RemoteImportFormat? ImportFormat = null);
+    RemoteImportFormat? ImportFormat = null,
+    bool AllowWeakOwner = false);
 
 public sealed class CliUsageException(string message) : Exception(message);
 

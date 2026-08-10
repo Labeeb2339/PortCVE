@@ -6,7 +6,7 @@ It is non-destructive and does not change local security state. It does not clos
 
 ## Set up once
 
-1. Install a finalized signed release using the file-backed PowerShell procedure in [install.md](install.md), or use its portable ZIP in a controlled engagement directory.
+1. There is no signed PortCVE release yet. Build the current source as described in the [README](../README.md) and run the published executable from a controlled directory. Once a signed release exists, use the file-backed procedure in [install.md](install.md) or its portable ZIP.
 2. Open a new terminal and verify the installation:
 
    ```powershell
@@ -16,7 +16,7 @@ It is non-destructive and does not change local security state. It does not clos
 
    Review any partial collector evidence. Protected Windows processes can legitimately hide some owner metadata from a standard-user session; use `portcve doctor --strict` when an automated workflow must reject any incomplete core evidence.
 
-3. If Docker or SBOM vulnerability checks are needed, install a trusted Windows x64 Trivy release from the official Aqua Security release page and verify its published checksum. PortCVE does not silently install or update Trivy. Point PortCVE at the verified executable and a dedicated local cache:
+3. If Docker or SBOM vulnerability checks are needed, install a trusted Windows x64 build from the official [Trivy releases](https://github.com/aquasecurity/trivy/releases) and verify its published checksum. PortCVE does not silently install or update Trivy. Point PortCVE at the verified executable and a dedicated local cache:
 
    ```powershell
    [Environment]::SetEnvironmentVariable(
@@ -67,6 +67,14 @@ Create a baseline only after reviewing the current machine as known-good:
 portcve lock -o .\listeners.lock.json
 ```
 
+The default requires strong owner identity for every selected listener. If it refuses only because protected processes have stable image names but no readable hash or exact service identity, review those names and explicitly store the weaker policy:
+
+```powershell
+portcve lock --allow-weak-owner -o .\listeners.lock.json
+```
+
+`diff` and `check` inherit that policy from the file; do not pass the flag again. Unknown owners still return exit `3`, as do strong-owner, bind-scope, requested firewall, or container evidence regressions. A same-name process observed later can pass even if its binary changed, so prefer an elevated strong baseline when binary replacement is in scope. Stronger evidence observed during a check does not silently rewrite the baseline; review and recreate the lockfile to adopt it.
+
 Review drift manually:
 
 ```powershell
@@ -80,7 +88,7 @@ portcve check .\listeners.lock.json --strict
 if ($LASTEXITCODE -ne 0) { throw "PortCVE check failed with exit $LASTEXITCODE" }
 ```
 
-Commit a reviewed privacy-reduced lockfile when it belongs to a repository policy. Do not create a baseline with `--allow-incomplete` and then treat it as a passing security control. Include UDP only when its extra churn is operationally useful.
+Commit a reviewed privacy-reduced lockfile when it belongs to a repository policy. A weak-owner `PASS` is explicitly labeled in human output and JSON exposes `allow_weak_owner`; retain that context in automation logs. Do not create a baseline with `--allow-incomplete` and then treat it as a passing security control. Include UDP only when its extra churn is operationally useful.
 
 For interactive change observation:
 
@@ -97,6 +105,8 @@ portcve db status
 portcve scan tcp:8080 --strict
 portcve scan --all --fail-on high
 ```
+
+`--all` scans every distinct immutable Docker image ID mapped to the observed TCP listeners. Native Windows listeners without an exact supported subject are not guessed into the report. If no scan-capable image is available, the command returns exit `3` rather than a clean gate.
 
 An explicit local CycloneDX or SPDX SBOM can be associated with one selected listener:
 
@@ -174,4 +184,4 @@ powershell.exe -NoProfile -ExecutionPolicy AllSigned `
     -Uninstall
 ```
 
-See [install.md](install.md) for the signature, checksum, rollback, custom-directory, and portable-ZIP details. See [cli.md](cli.md) for the complete option and evidence contract.
+See [install.md](install.md) for signature, checksum, rollback, custom-directory, and portable-ZIP details. See [cli.md](cli.md) for the complete command, JSON, and exit-code reference.

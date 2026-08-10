@@ -14,7 +14,6 @@ public sealed class WindowsFirewallCollector
 {
     private const string FirewallScript = """
         $ErrorActionPreference = 'Stop'
-        Import-Module NetSecurity -ErrorAction Stop
 
         $rules = @(
           Get-NetFirewallRule -PolicyStore ActiveStore -Enabled True -Direction Inbound -ErrorAction Stop
@@ -154,7 +153,8 @@ public sealed class WindowsFirewallCollector
         var result = await PowerShellJsonRunner.RunAsync(
             FirewallScript,
             TimeSpan.FromSeconds(30),
-            cancellationToken);
+            cancellationToken,
+            TrustedWindowsPowerShellModule.NetSecurity);
         stopwatch.Stop();
 
         if (!result.Succeeded)

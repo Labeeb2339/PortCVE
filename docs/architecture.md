@@ -19,11 +19,11 @@ PortCVE is a collection-and-correlation CLI. It does not sniff packets, execute 
 
 Native socket collection and a bounded Docker named-pipe probe run for every live collection. If the pipe is absent, the Docker collector returns `unavailable` quickly and does not start Docker Desktop or any container. Windows Firewall collection is intentionally opt-in for inventory, lock, and watch because effective rule enumeration is much slower.
 
-## Evidence source boundary
+## Evidence sources
 
 PortCVE labels evidence by source because the sources have different semantics:
 
-| Evidence | Source | Claim boundary |
+| Evidence | Source | Limits |
 | --- | --- | --- |
 | TCP/UDP endpoint and PID | Native IP Helper owner-PID tables | Direct point-in-time host observation; still vulnerable to collection races and PID reuse. |
 | Process path/time/SID, parent and service candidates | Native process/token, Toolhelp, and Service Control Manager APIs | Best-effort enrichment after the socket sample; access denial and process churn are explicit limitations. |

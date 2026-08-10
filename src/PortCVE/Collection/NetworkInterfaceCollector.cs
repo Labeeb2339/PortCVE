@@ -115,7 +115,8 @@ public sealed class NetworkInterfaceCollector
         var result = await PowerShellJsonRunner.RunAsync(
             ProfileScript,
             TimeSpan.FromSeconds(8),
-            cancellationToken);
+            cancellationToken,
+            TrustedWindowsPowerShellModule.NetConnection);
         if (!result.Succeeded)
         {
             diagnostics.Add(new(

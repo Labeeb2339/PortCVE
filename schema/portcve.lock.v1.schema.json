@@ -26,6 +26,11 @@
       "type": "boolean",
       "description": "Whether UDP binds are part of this baseline and must be included in later diff/check collection."
     },
+    "allow_weak_owner": {
+      "type": "boolean",
+      "default": false,
+      "description": "Explicit policy opt-in permitting name_only owner identities to support check decisions. Missing means false. unknown owner identities remain incomplete, and objective ownership evidence remains partial when any name_only identity is present."
+    },
     "selector": {
       "$ref": "#/$defs/selector"
     },
@@ -34,6 +39,8 @@
     },
     "listeners": {
       "type": "array",
+      "maxItems": 50000,
+      "description": "Normalized listener records. PortCVE also enforces a 16 MiB total lockfile input limit before deserialization.",
       "items": {
         "$ref": "#/$defs/listener"
       }

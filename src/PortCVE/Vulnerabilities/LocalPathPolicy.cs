@@ -53,6 +53,24 @@ internal static class LocalPathPolicy
         return ValidateLocalFile(path, requireExists: true, "trivy_executable", "Trivy executable");
     }
 
+    public static LocalPathValidation ValidateExistingWindowsPowerShellExecutable(string path)
+    {
+        return ValidateLocalFile(
+            path,
+            requireExists: true,
+            "powershell_executable",
+            "Windows PowerShell executable");
+    }
+
+    public static LocalPathValidation ValidateExistingWindowsPowerShellModule(string path)
+    {
+        return ValidateLocalFile(
+            path,
+            requireExists: true,
+            "powershell_module",
+            "Windows PowerShell module");
+    }
+
     public static LocalPathValidation ValidateExistingTrivyDatabaseFile(string path)
     {
         return ValidateLocalFile(path, requireExists: true, "trivy_database", "Trivy database");
