@@ -29,13 +29,21 @@ internal static class RemoteFingerprintParser
         "LiteSpeed", "Jetty", "Caddy", "gunicorn", "uvicorn", "Werkzeug", "Kestrel",
         "PHP", "ASP.NET");
     private static readonly ProductPattern[] ProductPatterns = [
-        new("OpenSSH", CreateRegex(@"\bOpenSSH[_/ -](?<version>[0-9][0-9A-Za-z._+~-]*)")),
-        new("Dropbear SSH", CreateRegex(@"\bdropbear[_/ -](?<version>[0-9][0-9A-Za-z._+~-]*)")),
+        new("OpenSSH", CreateRegex(
+            @"\AOpenSSH_(?<version>[0-9]+(?:\.[0-9]+)+p[0-9]+)\z")),
+        // These catalog-eligible patterns are anchored to the product's
+        // protocol field or canonical greeting. Do not loosen them into a
+        // contains-search: greeting text is remotely controlled and a nearby
+        // product name is not evidence that the named implementation spoke.
+        new("Dropbear SSH", CreateRegex(@"\Adropbear_(?<version>[0-9]+(?:\.[0-9]+)+)\z")),
         new("libssh", CreateRegex(@"\blibssh[_/ -](?<version>[0-9][0-9A-Za-z._+~-]*)")),
-        new("ProFTPD", CreateRegex(@"\bProFTPD(?:\s+|/)(?<version>[0-9][0-9A-Za-z._+~-]*)")),
-        new("vsftpd", CreateRegex(@"\bvsFTPd(?:\s+|/)(?<version>[0-9][0-9A-Za-z._+~-]*)")),
+        new("ProFTPD", CreateRegex(
+            @"\A220 ProFTPD (?<version>[0-9]+(?:\.[0-9]+)+[a-z]?) Server \(.+\) \[[^\[\]]+\]\z")),
+        new("vsftpd", CreateRegex(
+            @"\A220 \(vsFTPd (?<version>[0-9]+(?:\.[0-9]+)+)\)\z")),
         new("FileZilla Server", CreateRegex(@"\bFileZilla Server(?:\s+|/)(?<version>[0-9][0-9A-Za-z._+~-]*)")),
-        new("Exim", CreateRegex(@"\bExim(?:\s+|/)(?<version>[0-9][0-9A-Za-z._+~-]*)")),
+        new("Exim", CreateRegex(
+            @"\A220 [^\s]+ ESMTP Exim (?<version>[0-9]+(?:\.[0-9]+)+)(?:\s+.+)?\z")),
         new("Sendmail", CreateRegex(@"\bSendmail(?:\s+|/)(?<version>[0-9][0-9A-Za-z._+~-]*)")),
         new("Dovecot", CreateRegex(@"\bDovecot(?:\s+|/)(?<version>[0-9][0-9A-Za-z._+~-]*)")),
         new("Courier", CreateRegex(@"\bCourier(?:\s+|/)(?<version>[0-9][0-9A-Za-z._+~-]*)")),

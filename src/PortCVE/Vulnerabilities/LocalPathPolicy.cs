@@ -48,6 +48,16 @@ internal static class LocalPathPolicy
         return ValidateLocalFile(path, requireExists: false, "sbom_path", "SBOM");
     }
 
+    public static LocalPathValidation ValidateExistingTrivyExecutable(string path)
+    {
+        return ValidateLocalFile(path, requireExists: true, "trivy_executable", "Trivy executable");
+    }
+
+    public static LocalPathValidation ValidateExistingTrivyDatabaseFile(string path)
+    {
+        return ValidateLocalFile(path, requireExists: true, "trivy_database", "Trivy database");
+    }
+
     public static LocalPathValidation ValidateExistingImportFile(string path)
     {
         return ValidateLocalFile(path, requireExists: true, "import_path", "Import input");

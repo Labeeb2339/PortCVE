@@ -8,12 +8,15 @@ labeled container, publishes temporary TCP and UDP echo ports, and removes its
 container and temporary files in a guarded finally block. By default both
 publications are loopback-only. -AllowWildcardUdp intentionally publishes the
 UDP echo service on 0.0.0.0 for bind-scope validation and can briefly expose it
-to the local network.
+to the local network. -ValidateRemoteScan additionally runs PortCVE's authorized
+active scanner against only the temporary loopback TCP publication and proves a
+generic echo service is not promoted to an application identity.
 #>
 [CmdletBinding()]
 param(
     [string]$PortCVEPath,
     [switch]$ValidateLockCheck,
+    [switch]$ValidateRemoteScan,
     [switch]$AllowWildcardUdp,
     [ValidateRange(5, 120)]
     [int]$TimeoutSeconds = 30
@@ -277,6 +280,34 @@ function Get-PortCVESnapshot {
     }
 }
 
+function Test-RemoteEchoScan {
+    param([int]$HostPort)
+
+    $description = 'PortCVE authorized Docker-forwarded TCP scan'
+    $capture = Invoke-CapturedCommand `
+        -FilePath $script:PortCVEPath `
+        -ArgumentList @(
+            'scan-host', '127.0.0.1',
+            '--ports', [string]$HostPort,
+            '--authorized', '--active', '--json', '--include-private',
+            '--connect-timeout', '2s', '--read-timeout', '2s'
+        ) `
+        -Description $description
+    $report = ConvertFrom-CapturedJson -Json $capture.StdOut -Description $description
+    $matches = @($report.hosts |
+        ForEach-Object { @($_.ports) } |
+        Where-Object { [int]$_.port -eq $HostPort })
+    Assert-Condition ($matches.Count -eq 1) "$description did not return exactly one selected endpoint."
+    Assert-Condition ($matches[0].state -eq 'open') "$description did not report the Docker-forwarded endpoint open."
+    Assert-Condition (@($matches[0].product_candidates).Count -eq 0) `
+        "$description promoted a generic echo service to an application identity."
+
+    return [pscustomobject]@{
+        state = [string]$matches[0].state
+        product_candidate_count = @($matches[0].product_candidates).Count
+    }
+}
+
 function Assert-DockerCollectorComplete {
     param(
         [Parameter(Mandatory = $true)]
@@ -516,6 +547,11 @@ try {
         $lockChecks += Test-LockCheckRoundTrip -Protocol 'udp' -Port $udpHostPort
     }
 
+    $remoteScan = $null
+    if ($ValidateRemoteScan) {
+        $remoteScan = Test-RemoteEchoScan -HostPort $tcpHostPort
+    }
+
     $result = [ordered]@{
         status = 'passed'
         docker_server_version = $serverVersion
@@ -542,6 +578,8 @@ try {
         default_json_redaction = 'passed'
         lock_check = if ($ValidateLockCheck) { 'passed' } else { 'skipped' }
         lock_checks = $lockChecks
+        authorized_remote_scan = if ($ValidateRemoteScan) { 'passed' } else { 'skipped' }
+        remote_scan = $remoteScan
     }
 }
 catch {

@@ -115,6 +115,55 @@ public sealed class CliParserTests
         Assert.Equal(TransportProtocol.Tcp, result.Protocol);
     }
 
+    [Theory]
+    [InlineData("status", CommandKind.DbStatus, false)]
+    [InlineData("update", CommandKind.DbUpdate, true)]
+    public void Parse_TrivyDatabaseCommands_AreExplicitAndBounded(
+        string action,
+        CommandKind expectedCommand,
+        bool json)
+    {
+        var arguments = json
+            ? new[] { "db", action, "--json" }
+            : new[] { "db", action };
+
+        var result = CliParser.Parse(arguments);
+
+        Assert.Equal(expectedCommand, result.Command);
+        Assert.Equal(json, result.Json);
+    }
+
+    [Theory]
+    [InlineData("db")]
+    [InlineData("db", "unknown")]
+    [InlineData("db", "status", "extra")]
+    [InlineData("db", "update", "--strict")]
+    [InlineData("db", "update", "--output", "report.json")]
+    [InlineData("db", "status", "--include-private")]
+    [InlineData("db", "status", "--online-advisories")]
+    public void Parse_InvalidTrivyDatabaseCommands_AreRejected(params string[] arguments)
+    {
+        Assert.Throws<CliUsageException>(() => CliParser.Parse(arguments));
+    }
+
+    [Fact]
+    public void Parse_TrivyDatabaseHelp_UsesGlobalReference()
+    {
+        var result = CliParser.Parse(["db", "--help"]);
+
+        Assert.Equal(CommandKind.Help, result.Command);
+    }
+
+    [Fact]
+    public void Parse_TrivyDatabasePrivateJson_IsExplicitlyWired()
+    {
+        var result = CliParser.Parse(["db", "status", "--json", "--include-private"]);
+
+        Assert.Equal(CommandKind.DbStatus, result.Command);
+        Assert.True(result.Json);
+        Assert.True(result.IncludePrivate);
+    }
+
     [Fact]
     public void Parse_ScanHost_PentestOptionsAreWired()
     {

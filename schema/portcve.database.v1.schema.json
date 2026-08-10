@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:portcve:schema:database:v1",
+  "title": "PortCVE Trivy database status v1",
+  "description": "Local Trivy executable and vulnerability-database readiness. Update documents record an explicit network request, while status documents remain offline. Structural and freshness validation is not independent cryptographic attestation of database contents.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool_version",
+    "provider",
+    "operation",
+    "state",
+    "ready",
+    "network_requested",
+    "privacy_mode",
+    "executable_path",
+    "cache_directory",
+    "maximum_database_age_seconds",
+    "duration_ms",
+    "code",
+    "message"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tool_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "provider": { "const": "trivy" },
+    "operation": { "enum": ["status", "update"] },
+    "state": {
+      "enum": ["ready", "missing", "stale", "invalid", "unavailable", "failed"]
+    },
+    "ready": { "type": "boolean" },
+    "network_requested": { "type": "boolean" },
+    "privacy_mode": { "enum": ["reduced", "private"] },
+    "executable_path": { "type": "string", "minLength": 1, "maxLength": 32767 },
+    "engine_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "cache_directory": { "type": "string", "minLength": 1, "maxLength": 32767 },
+    "database_schema_version": { "type": "integer", "minimum": 1 },
+    "database_updated_at": { "type": "string", "format": "date-time" },
+    "database_next_update": { "type": "string", "format": "date-time" },
+    "database_age_seconds": { "type": "integer", "minimum": 0 },
+    "maximum_database_age_seconds": { "const": 259200 },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "message": { "type": "string", "minLength": 1, "maxLength": 1024 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "status" } }, "required": ["operation"] },
+      "then": { "properties": { "network_requested": { "const": false } } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "update" } }, "required": ["operation"] },
+      "then": { "properties": { "network_requested": { "const": true } } }
+    },
+    {
+      "if": { "properties": { "ready": { "const": true } }, "required": ["ready"] },
+      "then": {
+        "properties": { "state": { "const": "ready" }, "code": { "const": "ok" } },
+        "required": [
+          "engine_version",
+          "database_schema_version",
+          "database_updated_at",
+          "database_age_seconds"
+        ]
+      },
+      "else": { "not": { "properties": { "state": { "const": "ready" } }, "required": ["state"] } }
+    }
+  ]
+}

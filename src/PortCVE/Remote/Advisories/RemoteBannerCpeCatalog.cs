@@ -7,7 +7,7 @@ namespace PortCVE.Remote.Advisories;
 internal sealed partial class RemoteBannerCpeCatalog
 {
     private const string OfficialDictionarySource =
-        "NVD Official CPE Dictionary (CPE API 2.0)";
+        "NVD Official CPE Dictionary (CPE API 2.0 vendor/product mapping)";
 
     private static readonly IReadOnlyDictionary<string, CatalogEntry> Entries =
         new Dictionary<string, CatalogEntry>(StringComparer.OrdinalIgnoreCase)
@@ -16,6 +16,13 @@ internal sealed partial class RemoteBannerCpeCatalog
             // Deliberately do not add broad names such as "Apache" or ambiguous nginx
             // vendor mappings. An absent entry is safer than an invented CPE identity.
             ["openssh"] = new("openbsd", "openssh", CpeVersionStyle.OpenSshPortable),
+            ["dropbear ssh"] = new(
+                "dropbear_ssh_project",
+                "dropbear_ssh",
+                CpeVersionStyle.Plain),
+            ["proftpd"] = new("proftpd", "proftpd", CpeVersionStyle.ProFtpdStable),
+            ["vsftpd"] = new("vsftpd_project", "vsftpd", CpeVersionStyle.Plain),
+            ["exim"] = new("exim", "exim", CpeVersionStyle.Plain),
             ["apache httpd"] = new("apache", "http_server", CpeVersionStyle.Plain),
             ["apache http server"] = new("apache", "http_server", CpeVersionStyle.Plain),
         };
@@ -93,6 +100,24 @@ internal sealed partial class RemoteBannerCpeCatalog
             cpeVersion = match.Groups["version"].Value;
             cpeUpdate = $"p{match.Groups["patch"].Value}";
         }
+        else if (entry.VersionStyle == CpeVersionStyle.ProFtpdStable)
+        {
+            if (!ProFtpdStableVersionRegex().IsMatch(normalizedVersion))
+            {
+                return Resolution.Unresolved(
+                    normalizedProduct,
+                    normalizedVersion,
+                    evidence,
+                    confidence,
+                    "version_not_cpe_safe",
+                    "The ProFTPD version was not a dotted stable release supported by this catalog mapping.");
+            }
+
+            // The Official CPE Dictionary represents stable patch-letter
+            // releases such as 1.3.8a in the version component itself.
+            cpeVersion = normalizedVersion.ToLowerInvariant();
+            cpeUpdate = "*";
+        }
         else
         {
             if (!DottedNumericVersionRegex().IsMatch(normalizedVersion))
@@ -126,6 +151,9 @@ internal sealed partial class RemoteBannerCpeCatalog
     [GeneratedRegex("^(?<version>[0-9]+(?:\\.[0-9]+)+)p(?<patch>[0-9]+)$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex OpenSshPortableVersionRegex();
 
+    [GeneratedRegex("^[0-9]+(?:\\.[0-9]+)+[a-z]?$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex ProFtpdStableVersionRegex();
+
     private sealed record CatalogEntry(
         string Vendor,
         string Product,
@@ -135,6 +163,7 @@ internal sealed partial class RemoteBannerCpeCatalog
     {
         Plain,
         OpenSshPortable,
+        ProFtpdStable,
     }
 
     internal sealed class Resolution

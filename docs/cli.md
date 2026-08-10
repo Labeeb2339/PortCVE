@@ -1,6 +1,6 @@
 # CLI reference
 
-PortCVE never changes local firewall/process state and never exploits a remote service. Local commands are offline except for explicitly documented account resolution. `scan-host` performs authorized, rate-limited TCP connections and safe identification probes only when the operator supplies `--authorized`.
+PortCVE never changes local firewall/process state and never exploits a remote service. Local commands are offline except for explicitly documented account resolution and the explicit `db update` command. `scan-host` performs authorized, rate-limited TCP connections and safe identification probes only when the operator supplies `--authorized`.
 
 ## Commands
 
@@ -15,6 +15,8 @@ portcve diff <lockfile>              Show current drift from a baseline
 portcve check <lockfile>             Gate security-relevant drift
 portcve scan <tcp:port>              Check exact subjects for one TCP listener
 portcve scan --all                   Check exact Docker image IDs for all TCP listeners
+portcve db status                    Inspect local Trivy and database freshness offline
+portcve db update                    Explicitly download and validate the Trivy database
 portcve scan-host <target> --authorized  Scan an authorized host or IPv4 CIDR
 portcve import nmap <scan.xml>       Normalize an existing Nmap XML file
 portcve import nuclei <results.jsonl> Normalize existing Nuclei JSONL findings
@@ -32,7 +34,7 @@ Every live collection also performs a bounded probe of the local Docker Engine n
 
 `scan` maps selected TCP listeners only to immutable Docker `sha256:` image IDs. Native Windows process names and paths are not guessed into products or CPEs. For one exact TCP port, `--sbom <path>` adds an explicitly declared local SBOM subject; it cannot be combined with `--all`.
 
-The scanner launches a separately installed Trivy executable without a shell, selects the local Docker daemon only, and supplies update, telemetry, version-check, VEX-update, and online dependency-resolution disable flags. It never downloads Trivy or a database. Set `PORTCVE_TRIVY_PATH` for a trusted local non-default executable and `PORTCVE_TRIVY_CACHE_DIR` for a non-default cache. The executable path (or the caller's `PATH` lookup when unset) is an explicit trust boundary and must not resolve through UNC storage or a reparse point. The cache, its database directory, metadata, and database file must resolve on an allowed local drive without reparse traversal before Trivy starts. The expected database metadata is `<cache>\db\metadata.json`; a missing or invalid database makes the subject unavailable, while a database older than 72 hours makes evidence partial.
+The scanner launches a separately installed Trivy executable without a shell, selects the local Docker daemon only, and supplies update, telemetry, version-check, VEX-update, and online dependency-resolution disable flags. A `scan` never downloads Trivy or a database. Set `PORTCVE_TRIVY_PATH` to the absolute path of a trusted local non-default executable and `PORTCVE_TRIVY_CACHE_DIR` for a non-default cache. The executable and cache must be on an allowed local drive without reparse traversal. The expected database metadata is `<cache>\db\metadata.json`; a missing or invalid database makes the subject unavailable, while a database older than 72 hours makes evidence partial.
 
 | Option | Behavior |
 | --- | --- |
@@ -45,6 +47,26 @@ The scanner launches a separately installed Trivy executable without a shell, se
 Human output and vulnerability JSON say `known_advisory_match`: they do not claim the package is reachable or exploitable. JSON uses `schema/portcve.vulnerability.v1.schema.json` and is redacted unless `--include-private` is supplied. If Trivy cannot run or no subject produces scan evidence, `scan` exits `3`; a selector with no matching TCP listener exits `1`.
 
 `--fail-on` is a security gate, not a best-effort filter. It returns `3` instead of passing when the vulnerability database or selected scan evidence is incomplete, even without a separate `--strict` flag.
+
+### Trivy database lifecycle
+
+PortCVE never updates vulnerability data implicitly. Database maintenance is split into two explicit commands:
+
+```powershell
+portcve db status
+portcve db status --json
+portcve db update
+```
+
+Trivy is an optional external dependency; PortCVE neither bundles nor installs it. For first-time setup, download the Windows x64 archive and its checksum file from the [official Trivy GitHub release](https://github.com/aquasecurity/trivy/releases), verify the archive's SHA-256 before extracting it to a protected local directory, set `PORTCVE_TRIVY_PATH` to the absolute `trivy.exe` path, and optionally set `PORTCVE_TRIVY_CACHE_DIR` to a protected local cache. Then run `portcve db update` followed by `portcve db status`. PortCVE does not use Winget/Scoop, a piped `irm | iex` installer, or an automatic download hidden inside `scan`.
+
+`db status` performs no network request. It resolves Trivy to a validated local `.exe`, runs a bounded offline `--version` check, and verifies the configured cache, database metadata schema, `trivy.db` file, update time, next-update time, and 72-hour freshness limit. Before reporting ready, it also makes Trivy open that database in a bounded offline vulnerability scan of a newly created empty private directory. This validation scans no user files, executes no target code, disables every update path, and rejects a corrupt/truncated database even when its metadata is fresh. Human output reports the executable path, Trivy version, cache directory, database schema version, timestamps, age, and a stable result code. JSON follows `schema/portcve.database.v1.schema.json` with `schema_version: 1` and `tool_version`. By default its `privacy_mode` is `reduced`, `executable_path` is `local-trivy-executable`, and `cache_directory` is `local-trivy-cache`; `--json --include-private` emits the exact validated paths with `privacy_mode: private`. A missing, stale, future-dated, malformed, unreadable, unsafe, or unavailable database returns exit code `3` instead of reporting readiness.
+
+`db update` is the only local vulnerability workflow that permits a database download. It invokes the validated Trivy executable directly without a shell and runs `trivy image --download-db-only` against the configured cache. The operation has a ten-minute timeout, bounded stdout/stderr, no progress output, a private per-invocation temporary directory, and post-update path, metadata, database-file, schema, and freshness validation. Trivy configuration, registry/cloud credentials, Docker endpoints, telemetry, version checks, proxy variables, and alternate-update environment variables are removed from the child environment; neither child output nor environment values are copied into PortCVE diagnostics. The command uses Trivy's built-in public database source and may require a direct outbound HTTPS path because ambient proxy configuration is intentionally not inherited. PortCVE's post-update check validates the local structure and freshness; it is not an independent cryptographic attestation of Trivy's database contents.
+
+When `PORTCVE_TRIVY_PATH` is unset, the database commands search absolute entries in the caller's `PATH` for `trivy.exe`, resolve the match to an absolute path, and reject UNC/device paths, mapped network drives, and reparse traversal before launch. If `PORTCVE_TRIVY_PATH` is set, it must itself be an absolute local `.exe` path. PortCVE does not download or install Trivy.
+
+These checks are path-based and repeated immediately before launch and verification. They do not claim to defeat a malicious same-user process that can replace a validated path during the remaining check/use window. Keep the Trivy executable and cache in directories that are not writable by untrusted local users, and do not run database maintenance concurrently with hostile local processes.
 
 ## Authorized remote assessment
 
@@ -67,7 +89,7 @@ These connections are observable and can create server, firewall, IDS, or rate-l
 
 One run queries at most 64 unique catalog-backed CPE identities. Repeated endpoint observations of the same identity share one `advisory_results` record and retain endpoint association through `advisory_result_id`; CVE/configuration payloads are not copied into every assessment. The summary and `--fail-on` evaluate the shared direct matches. Additional unique identities are not queried, receive an `nvd_identity_cap_exceeded` endpoint diagnostic, and make the aggregate advisory status `partial`; `--strict` or `--fail-on` therefore returns incomplete-evidence exit code `3` instead of treating the bounded result as complete.
 
-The initial provenance-bound catalog intentionally resolves only OpenSSH portable releases and Apache HTTP Server/httpd identities. Other parsed products remain useful fingerprint evidence but are `cpe_unresolved` until a reviewed catalog mapping is added; PortCVE never guesses a vendor/product CPE to increase finding count.
+The provenance-bound catalog intentionally resolves only reviewed, protocol-bound identities: OpenSSH portable releases, Apache HTTP Server/httpd, Dropbear SSH, ProFTPD, vsftpd, and Exim. A product is eligible only when its version and canonical protocol greeting match the reviewed grammar for that mapping. Other parsed products, ambiguous/custom banners, HTTP `Server` headers, release-candidate versions, and port-only observations remain useful fingerprint evidence but are `cpe_unresolved`; PortCVE never guesses a vendor/product CPE to increase finding count.
 
 Remote findings use `candidate`, `conditional_candidate`, or `inconclusive`; all retain `exploitability: not_assessed`. Remote `--fail-on` requires `--online-advisories`, applies only to direct high/critical candidates, and returns `3` rather than passing if advisory evidence is partial. Conditional or inconclusive records never trigger exit `1`. Default JSON aliases targets/addresses and removes raw banners/certificate identity; `--include-private` retains them. `-o` writes a redacted versioned JSON report unless `--include-private` is supplied and refuses to replace an existing file.
 

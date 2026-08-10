@@ -59,6 +59,22 @@ public static class CliParser
                 port = queryPort;
                 index++;
             }
+            else if (first.Equals("db", StringComparison.OrdinalIgnoreCase))
+            {
+                if (arguments.Count < 2)
+                {
+                    throw new CliUsageException("db requires exactly one action: db <status|update>.");
+                }
+
+                command = arguments[1].ToLowerInvariant() switch
+                {
+                    "status" => CommandKind.DbStatus,
+                    "update" => CommandKind.DbUpdate,
+                    "-h" or "--help" => CommandKind.Help,
+                    _ => throw new CliUsageException("db action must be status or update."),
+                };
+                index += 2;
+            }
             else
             {
                 command = first.ToLowerInvariant() switch
@@ -345,6 +361,25 @@ public static class CliParser
             {
                 throw new CliUsageException(
                     "import accepts only its format and local input path, --json, --output, --force, and --strict.");
+            }
+        }
+        else if (command is CommandKind.DbStatus or CommandKind.DbUpdate)
+        {
+            if (port is not null || protocol is not null || process is not null || scope is not null
+                || input is not null || output is not null || firewall || firewallExplicitlyDisabled || evidence
+                || strict || force || allowIncomplete || includeUdp || resolveAccounts
+                || interval is not null || iterations is not null || all || sbomPath is not null || failOn is not null
+                || remoteTarget is not null || remotePorts is not null || active || authorized || onlineAdvisories
+                || concurrency is not null || rate is not null || connectTimeout is not null || readTimeout is not null
+                || maximumHosts is not null || importFormat is not null)
+            {
+                throw new CliUsageException(
+                    "db status/update accept only --json, --format <text|json>, and --include-private.");
+            }
+
+            if (includePrivate && !json)
+            {
+                throw new CliUsageException("db status/update --include-private requires JSON output.");
             }
         }
         else if (all || sbomPath is not null || failOn is not null)

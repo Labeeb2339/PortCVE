@@ -68,4 +68,54 @@ public sealed class WindowsEndpointCollectorTests
 
         Assert.NotNull(match);
     }
+
+    [Fact]
+    public async Task Collect_RemainsSafeAndRetainsStableListenerDuringSocketChurn()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var stableListener = new TcpListener(IPAddress.Loopback, 0);
+        stableListener.Start();
+        var stablePort = Assert.IsType<IPEndPoint>(stableListener.LocalEndpoint).Port;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var churn = Task.Run(async () =>
+        {
+            for (var index = 0; index < 250; index++)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                using (var listener = new TcpListener(IPAddress.Loopback, 0))
+                {
+                    listener.Start();
+                }
+
+                using (var udp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
+                {
+                    _ = udp.Client.LocalEndPoint;
+                }
+
+                await Task.Delay(1, cancellation.Token);
+            }
+        }, cancellation.Token);
+
+        var collector = new WindowsEndpointCollector();
+        var sawStableListener = false;
+        for (var scan = 0; scan < 50; scan++)
+        {
+            cancellation.Token.ThrowIfCancellationRequested();
+            var endpoints = collector.Collect();
+            sawStableListener |= endpoints.Any(endpoint =>
+                endpoint.Protocol == WindowsEndpointProtocol.Tcp
+                && endpoint.LocalAddress.Equals(IPAddress.Loopback)
+                && endpoint.LocalPort == stablePort
+                && endpoint.ProcessId == (uint)Environment.ProcessId
+                && endpoint.TcpState == TcpState.Listen);
+            Assert.All(endpoints, static endpoint => Assert.InRange(endpoint.LocalPort, 0, 65_535));
+        }
+
+        await churn;
+        Assert.True(sawStableListener);
+    }
 }

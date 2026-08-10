@@ -21,6 +21,7 @@ public sealed class CliApplication
     private readonly IRemoteHostScanner remoteHostScanner;
     private readonly IRemoteAdvisoryClient remoteAdvisoryClient;
     private readonly Func<string?> nvdApiKeyProvider;
+    private readonly ITrivyDatabaseService trivyDatabaseService;
 
     public CliApplication()
         : this(
@@ -85,6 +86,40 @@ public sealed class CliApplication
         IRemoteHostScanner remoteHostScanner,
         IRemoteAdvisoryClient remoteAdvisoryClient,
         Func<string?> nvdApiKeyProvider)
+        : this(
+            snapshotBuilder,
+            lockfileService,
+            vulnerabilityScanner,
+            sbomPathValidator,
+            remoteHostScanner,
+            remoteAdvisoryClient,
+            nvdApiKeyProvider,
+            new TrivyDatabaseService())
+    {
+    }
+
+    internal CliApplication(ITrivyDatabaseService trivyDatabaseService)
+        : this(
+            new SnapshotBuilder(),
+            new LockfileService(),
+            new TrivyVulnerabilityScanner(),
+            LocalPathPolicy.ValidateExistingLocalFile,
+            new RemoteHostScanner(),
+            CreateNvdClient(),
+            ReadNvdApiKey,
+            trivyDatabaseService)
+    {
+    }
+
+    internal CliApplication(
+        ISnapshotBuilder snapshotBuilder,
+        LockfileService lockfileService,
+        IVulnerabilityScanner vulnerabilityScanner,
+        Func<string, LocalPathValidation> sbomPathValidator,
+        IRemoteHostScanner remoteHostScanner,
+        IRemoteAdvisoryClient remoteAdvisoryClient,
+        Func<string?> nvdApiKeyProvider,
+        ITrivyDatabaseService trivyDatabaseService)
     {
         this.snapshotBuilder = snapshotBuilder;
         this.lockfileService = lockfileService;
@@ -93,6 +128,7 @@ public sealed class CliApplication
         this.remoteHostScanner = remoteHostScanner;
         this.remoteAdvisoryClient = remoteAdvisoryClient;
         this.nvdApiKeyProvider = nvdApiKeyProvider;
+        this.trivyDatabaseService = trivyDatabaseService;
     }
 
     public async Task<int> RunAsync(
@@ -109,6 +145,8 @@ public sealed class CliApplication
             CommandKind.Scan => await RunScanAsync(options, output, error, cancellationToken),
             CommandKind.ScanHost => await RunScanHostAsync(options, output, error, cancellationToken),
             CommandKind.Import => await RunImportAsync(options, output, error, cancellationToken),
+            CommandKind.DbStatus or CommandKind.DbUpdate =>
+                await RunTrivyDatabaseAsync(options, output, error, cancellationToken),
             CommandKind.Lock => await RunLockAsync(options, output, error, cancellationToken),
             CommandKind.Snapshot => await RunSnapshotAsync(options, output, error, cancellationToken),
             CommandKind.Diff or CommandKind.Check => await RunDiffAsync(options, output, error, cancellationToken),
@@ -116,6 +154,63 @@ public sealed class CliApplication
             CommandKind.Doctor => await RunDoctorAsync(options, output, error, cancellationToken),
             _ => throw new CliUsageException("Unsupported command."),
         };
+    }
+
+    private async Task<int> RunTrivyDatabaseAsync(
+        CliOptions options,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        var status = options.Command == CommandKind.DbUpdate
+            ? await trivyDatabaseService.UpdateAsync(cancellationToken)
+            : await trivyDatabaseService.GetStatusAsync(cancellationToken);
+
+        if (options.Json)
+        {
+            var document = TrivyDatabaseDocument.FromStatus(status, Version);
+            if (!options.IncludePrivate)
+            {
+                document = TrivyDatabaseDocumentRedactor.Redact(document);
+            }
+
+            await output.WriteLineAsync(JsonOutput.Serialize(document));
+        }
+        else
+        {
+            output.WriteLine("Trivy vulnerability database");
+            output.WriteLine($"State            {status.State.ToString().ToLowerInvariant()}");
+            output.WriteLine($"Operation        {status.Operation.ToString().ToLowerInvariant()}");
+            output.WriteLine($"Network requested {(status.NetworkRequested ? "yes" : "no")}");
+            output.WriteLine($"Executable       {status.ExecutablePath ?? "unresolved"}");
+            output.WriteLine($"Trivy version    {status.EngineVersion ?? "unavailable"}");
+            output.WriteLine($"Cache            {status.CacheDirectory ?? "invalid"}");
+            output.WriteLine($"Database schema  {status.DatabaseSchemaVersion?.ToString() ?? "unavailable"}");
+            output.WriteLine($"Database updated {status.DatabaseUpdatedAt?.ToString("O") ?? "unavailable"}");
+            output.WriteLine($"Next update      {status.DatabaseNextUpdate?.ToString("O") ?? "unavailable"}");
+            output.WriteLine($"Database age     {FormatDatabaseAge(status.DatabaseAgeSeconds)}");
+            output.WriteLine($"Result           {status.Code}: {status.Message}");
+        }
+
+        if (status.Ready)
+        {
+            return ExitCodes.Success;
+        }
+
+        error.WriteLine($"error: {status.Code}: {status.Message}");
+        return status.State == TrivyDatabaseState.Failed
+            ? ExitCodes.RuntimeFailure
+            : ExitCodes.IncompleteEvidence;
+    }
+
+    private static string FormatDatabaseAge(long? ageSeconds)
+    {
+        if (ageSeconds is null)
+        {
+            return "unavailable";
+        }
+
+        return $"{ageSeconds.Value / 3600d:0.#} hours";
     }
 
     private async Task<int> RunScanAsync(
@@ -1189,6 +1284,8 @@ public sealed class CliApplication
         output.WriteLine("  portcve check listeners.lock    Fail on new, wider, or owner-changed binds");
         output.WriteLine("  portcve scan tcp:8080           Check an exact listener's Docker image offline");
         output.WriteLine("  portcve scan --all              Check exact Docker images for all TCP listeners");
+        output.WriteLine("  portcve db status               Inspect local Trivy and database freshness offline");
+        output.WriteLine("  portcve db update               Explicitly download and validate the Trivy vulnerability database");
         output.WriteLine("  portcve scan-host <target> --authorized  Discover and fingerprint authorized TCP services");
         output.WriteLine("  portcve import nmap <scan.xml>  Normalize existing Nmap XML evidence");
         output.WriteLine("  portcve import nuclei <file>    Normalize existing Nuclei JSONL evidence");
@@ -1228,6 +1325,7 @@ public sealed class CliApplication
         output.WriteLine("Remote work requires --authorized and never includes exploits, credentials, brute force, or DoS.");
         output.WriteLine("A successful connection or candidate CVE match does not prove exploitability.");
         output.WriteLine("Vulnerability scans use a preinstalled Trivy database in offline mode; no update is automatic.");
+        output.WriteLine("Only the explicit 'portcve db update' command permits a Trivy database download.");
         return ExitCodes.Success;
     }
 

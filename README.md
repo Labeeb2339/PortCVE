@@ -102,17 +102,21 @@ This proves the tested loopback discovery and adaptive-HTTP path—not authoriza
 
 ### Signed installer
 
-For finalized signed releases, download, checksum, Authenticode-verify, inspect, and run the release's file-backed `install.ps1`. It refuses piped or in-memory execution, verifies its own signer before network or filesystem activity, installs without administrator rights to `%LOCALAPPDATA%\Programs\PortCVE`, verifies the versioned ZIP and signed executable, and updates the user `PATH` with rollback protection. See the complete [installer instructions and trust checks](docs/install.md).
+For finalized signed releases, download, checksum, Authenticode-verify, inspect, and run the release's file-backed `install.ps1`. It refuses piped or in-memory execution, verifies its own signer before network or filesystem activity, installs without administrator rights to `%LOCALAPPDATA%\Programs\PortCVE`, verifies the versioned ZIP and signed executable, keeps a verified signed installer copy for maintenance, and updates the user `PATH` transactionally. Running the installed signed file again updates PortCVE; `-Version <tag>` selects an exact signed release; and `-Uninstall` removes only a receipt-bound installation and its exact user `PATH` entry without making a network request. See the complete [install, update, rollback, uninstall, and trust instructions](docs/install.md).
 
 The checked-in `scripts/install.ps1` is an unsigned, unfinalized template and deliberately refuses to run. Production installation requires the separately downloaded and signed release asset; pipe-to-execution installation is refused.
 
-The installer never permits an unsigned production install. The historical `v0.1.0-alpha.1` release is unsigned and is intentionally rejected.
+The installer never permits an unsigned production install. The historical `v0.1.0-alpha.1` BindWitness-era release is unsigned and is intentionally rejected.
 
-### Manual release binary
+> Availability: no finalized signed PortCVE release exists yet. Current users must build from source; the managed installer and portable signed-release commands apply only after the first verified signed release is published.
 
-Download the Windows x64 ZIP from the repository's Releases page, verify its SHA-256 file, extract `portcve.exe`, and place it somewhere on your `PATH`.
+### Portable release ZIP
 
-Release binaries are self-contained; the .NET runtime is not required. Alpha binaries are not yet code-signed, so verify checksums before running them.
+Download `portcve-<tag>-win-x64.zip` from [PortCVE Releases](https://github.com/Labeeb2339/PortCVE/releases), verify its exact entry in `SHA256SUMS.txt`, extract it, and verify the embedded `portcve.exe` Authenticode signature before use. The portable ZIP does not change `PATH` and has no managed update or uninstall state.
+
+Release binaries are self-contained; the .NET runtime is not required. Do not treat a checksum alone as a substitute for the required signature on finalized releases.
+
+After installation, follow the concise [daily-use workflow](docs/daily-use.md) for readiness checks, baselines, authorized assessments, and evidence handling.
 
 ### Build from source
 
@@ -235,6 +239,7 @@ All JSON uses snake_case, stable enum strings, a mandatory `schema_version`, det
 
 - [Snapshot schema v1](schema/portcve.snapshot.v1.schema.json)
 - [Lockfile schema v1](schema/portcve.lock.v1.schema.json)
+- [Trivy database status schema v1](schema/portcve.database.v1.schema.json)
 - [Vulnerability report schema v1](schema/portcve.vulnerability.v1.schema.json)
 - [Remote assessment schema v1](schema/portcve.remote.v1.schema.json)
 - [External evidence import schema v1](schema/portcve.import.v1.schema.json)
@@ -250,7 +255,7 @@ Included now:
 - loopback/interface/wildcard classification;
 - active Windows network-profile mapping;
 - local Docker Engine named-pipe collection and medium-confidence published-port correlation;
-- offline known-advisory matching for immutable local Docker image IDs and explicit local SBOMs, with database freshness and CI exit gates;
+- explicit offline Trivy database status and explicit-only database update, plus offline known-advisory matching for immutable local Docker image IDs and explicit local SBOMs with freshness and CI exit gates;
 - authorized TCP host/CIDR discovery with frozen DNS, bounded concurrency/rate/timeouts/evidence, safe HTTP/TLS/greeting probes, and privacy-reduced JSON;
 - conservative explicit-online NVD enrichment for verified catalog-backed remote identities, including conditional applicability;
 - bounded import-only interoperability for Nmap XML and Nuclei JSONL;

@@ -2,15 +2,17 @@
 
 The order matters: correctness and evidence quality come before more platforms or a GUI.
 
-## 0.1 stabilization
+## Current stabilization
 
-- Golden JSON and lockfile compatibility fixtures, including container publications and image-set identity
-- More Windows 10, Windows 11, and Server integration coverage
-- Broader Docker Desktop version, permission, absent-Engine, and published-port integration coverage beyond the validated 28.3.2 TCP/UDP fixture
+Completed in the current `0.2.0-alpha.1` development line: golden JSON/schema and lockfile fixtures, Docker publication/image-set identity, socket-churn coverage, enforceable performance budgets, Windows 11 local validation, and fresh Windows Server 2022/2025 CI jobs with live loopback assessment.
+
+Remaining before a stable `1.0` claim:
+
+- Windows 10 compatibility validation and broader supported Windows 11 builds
+- Broader Docker Desktop version, permission, absent-Engine, and published-port coverage beyond the validated 28.3.2 TCP/UDP fixture
 - Standard-user and administrator comparison tests
 - Disposable-VM firewall rule matrix
-- Socket/process churn soak tests and performance budgets
-- Signed Windows releases when signing infrastructure is available
+- A public-trust Authenticode release after publisher identity validation and protected signing credentials are configured
 
 ## 0.2 guest and workload attribution
 

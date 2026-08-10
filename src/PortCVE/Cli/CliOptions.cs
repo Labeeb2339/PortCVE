@@ -11,6 +11,8 @@ public enum CommandKind
     Scan,
     ScanHost,
     Import,
+    DbStatus,
+    DbUpdate,
     Lock,
     Snapshot,
     Diff,

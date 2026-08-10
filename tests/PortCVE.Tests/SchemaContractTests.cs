@@ -54,6 +54,59 @@ public sealed class SchemaContractTests
     }
 
     [Fact]
+    public void PrivateAndReducedDatabaseDocumentsMatchPublishedSchema()
+    {
+        var status = new TrivyDatabaseStatus(
+            TrivyDatabaseDocument.CurrentSchemaVersion,
+            "trivy",
+            TrivyDatabaseOperation.Status,
+            TrivyDatabaseState.Ready,
+            true,
+            false,
+            "C:\\Tools\\trivy.exe",
+            "0.73.0",
+            "C:\\Cache\\trivy",
+            2,
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch.AddHours(6),
+            60,
+            (long)TimeSpan.FromHours(72).TotalSeconds,
+            5,
+            "ok",
+            "The local Trivy vulnerability database is ready.");
+        var privateDocument = TrivyDatabaseDocument.FromStatus(status, "test");
+
+        AssertSerializedShape(
+            JsonOutput.Serialize(privateDocument),
+            "portcve.database.v1.schema.json");
+        AssertSerializedShape(
+            JsonOutput.Serialize(TrivyDatabaseDocumentRedactor.Redact(privateDocument)),
+            "portcve.database.v1.schema.json");
+    }
+
+    [Fact]
+    public void DatabaseSchemaIdentityAndReleasePackagingAreStable()
+    {
+        var root = RepositoryRoot();
+        using var schema = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(root, "schema", "portcve.database.v1.schema.json")));
+
+        Assert.Equal(
+            "https://json-schema.org/draft/2020-12/schema",
+            schema.RootElement.GetProperty("$schema").GetString());
+        Assert.Equal(
+            "urn:portcve:schema:database:v1",
+            schema.RootElement.GetProperty("$id").GetString());
+        Assert.Equal(1,
+            schema.RootElement.GetProperty("properties").GetProperty("schema_version").GetProperty("const").GetInt32());
+
+        var releaseWorkflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
+        Assert.Matches(
+            @"(?m)Copy-Item\s+-LiteralPath\s+schema\s+-Destination\s+.+\s+-Recurse\s*$",
+            releaseWorkflow);
+    }
+
+    [Fact]
     public void ExternalEvidenceImportShapeMatchesPublishedSchema()
     {
         var document = new PentestImportDocument(

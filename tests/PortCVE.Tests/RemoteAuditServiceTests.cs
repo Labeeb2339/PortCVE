@@ -37,6 +37,62 @@ public sealed class RemoteAuditServiceTests
         Assert.True(report.Summary.IsComplete);
     }
 
+    [Theory]
+    [InlineData(
+        "Dropbear SSH",
+        "2020.81",
+        "SSH-2.0-dropbear_2020.81",
+        "cpe:2.3:a:dropbear_ssh_project:dropbear_ssh:2020.81:*:*:*:*:*:*:*")]
+    [InlineData(
+        "ProFTPD",
+        "1.3.8a",
+        "220 ProFTPD 1.3.8a Server (fixture) [192.0.2.99]",
+        "cpe:2.3:a:proftpd:proftpd:1.3.8a:*:*:*:*:*:*:*")]
+    [InlineData(
+        "vsftpd",
+        "3.0.3",
+        "220 (vsFTPd 3.0.3)",
+        "cpe:2.3:a:vsftpd_project:vsftpd:3.0.3:*:*:*:*:*:*:*")]
+    [InlineData(
+        "Exim",
+        "4.98.2",
+        "220 mail.example ESMTP Exim 4.98.2 Sun, 10 Aug 2026 00:00:00 +0000",
+        "cpe:2.3:a:exim:exim:4.98.2:*:*:*:*:*:*:*")]
+    public async Task AssessAsync_ProtocolBoundCatalogProductsReachOneNormalizedProviderQuery(
+        string product,
+        string version,
+        string evidence,
+        string expectedCpe)
+    {
+        var advisory = new FixedAdvisoryClient(new(
+            RemoteAdvisoryStatus.Complete,
+            RemoteAdvisoryResult.ProviderName,
+            RemoteAdvisoryResult.ExplicitOnlineNetworkMode,
+            DateTimeOffset.UnixEpoch,
+            [],
+            []));
+        var service = new RemoteAuditService(
+            new FixedHostScanner(
+                RemoteProductConfidence.BannerPattern,
+                product,
+                version,
+                evidence),
+            advisory);
+
+        var report = await service.AssessAsync(
+            Options(["192.0.2.10"], online: true),
+            CancellationToken.None);
+
+        Assert.Equal(1, advisory.CallCount);
+        var assessment = Assert.Single(report.AdvisoryAssessments);
+        Assert.Equal(RemoteIdentityDisposition.Resolved, assessment.IdentityDisposition);
+        Assert.Equal(expectedCpe, assessment.Cpe23Uri);
+        var providerResult = Assert.Single(report.AdvisoryResults);
+        Assert.Equal(expectedCpe, providerResult.Cpe23Uri);
+        Assert.Equal("remote-advisory-result-0001", assessment.AdvisoryResultId);
+        Assert.Equal(RemoteAdvisoryStatus.Complete, report.AdvisoryStatus);
+    }
+
     [Fact]
     public async Task AssessAsync_RepeatedIdentitySerializesProviderMatchesOnceAndKeepsEndpointReferences()
     {
@@ -375,7 +431,11 @@ public sealed class RemoteAuditServiceTests
             TimeSpan.FromMilliseconds(100),
             null);
 
-    private sealed class FixedHostScanner(RemoteProductConfidence confidence) : IRemoteHostScanner
+    private sealed class FixedHostScanner(
+        RemoteProductConfidence confidence,
+        string product = "OpenSSH",
+        string version = "9.6p1",
+        string evidence = "SSH-2.0-OpenSSH_9.6p1") : IRemoteHostScanner
     {
         public Task<RemoteHostReport> ScanAsync(
             RemoteScanOptions options,
@@ -383,13 +443,13 @@ public sealed class RemoteAuditServiceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             var candidate = new RemoteProductCandidate(
-                "OpenSSH",
-                "9.6p1",
+                product,
+                version,
                 confidence,
                 confidence == RemoteProductConfidence.BannerPattern
                     ? "passive-greeting"
                     : "passive-http-head:server",
-                "SSH-2.0-OpenSSH_9.6p1");
+                evidence);
             return Task.FromResult(new RemoteHostReport(
                 options.Target,
                 ["192.0.2.99"],
@@ -406,7 +466,7 @@ public sealed class RemoteAuditServiceTests
                                 "ssh",
                                 RemoteFingerprintConfidence.ProtocolConfirmed,
                                 "passive-greeting",
-                                "SSH-2.0-OpenSSH_9.6p1",
+                                evidence,
                                 RemoteFingerprint.ReadOnlyAttributes()),
                         ],
                         [candidate],

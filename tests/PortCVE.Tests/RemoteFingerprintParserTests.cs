@@ -23,7 +23,9 @@ public sealed class RemoteFingerprintParserTests
     }
 
     [Theory]
-    [InlineData("220 ftp.example FTP server (ProFTPD 1.3.8) ready", "ftp", "ProFTPD", "1.3.8")]
+    [InlineData("SSH-2.0-dropbear_2020.81", "ssh", "Dropbear SSH", "2020.81")]
+    [InlineData("220 ProFTPD 1.3.8a Server (example) [192.0.2.1]", "ftp", "ProFTPD", "1.3.8a")]
+    [InlineData("220 (vsFTPd 3.0.3)", "ftp", "vsftpd", "3.0.3")]
     [InlineData("220 mail.example ESMTP Exim 4.98 ready", "smtp", "Exim", "4.98")]
     [InlineData("+OK Dovecot 2.3.21 POP3 ready", "pop3", "Dovecot", "2.3.21")]
     [InlineData("* OK Dovecot 2.3.21 IMAP ready", "imap", "Dovecot", "2.3.21")]
@@ -39,6 +41,24 @@ public sealed class RemoteFingerprintParserTests
         var candidate = Assert.Single(result.ProductCandidates);
         Assert.Equal(product, candidate.Product);
         Assert.Equal(version, candidate.Version);
+    }
+
+    [Theory]
+    [InlineData("SSH-2.0-vendor-dropbear_2020.81")]
+    [InlineData("SSH-2.0-dropbear_2020.81-custom")]
+    [InlineData("SSH-2.0-vendor-OpenSSH_9.9p1")]
+    [InlineData("220 ftp.example FTP server (ProFTPD 1.3.8a) ready")]
+    [InlineData("220 ProFTPD 1.3.8a ready")]
+    [InlineData("220 ProFTPD 1.3.8rc4 Server (example) [192.0.2.1]")]
+    [InlineData("220 welcome (vsFTPd 3.0.3)")]
+    [InlineData("220 (vsFTPd 3.0.3-custom)")]
+    [InlineData("220 mail.example ESMTP gateway Exim 4.98.2")]
+    [InlineData("220 mail.example ESMTP Exim 4.98.2-custom")]
+    public void GreetingParser_CatalogProductsRequireCanonicalProtocolBoundGrammar(string banner)
+    {
+        var result = RemoteFingerprintParser.AnalyzeGreeting(banner + "\r\n", 1_024);
+
+        Assert.Empty(result.ProductCandidates);
     }
 
     [Fact]
@@ -114,6 +134,19 @@ public sealed class RemoteFingerprintParserTests
             maximumEvidenceBytes: 1_024);
 
         Assert.Empty(result.Fingerprints);
+        Assert.Empty(result.ProductCandidates);
+    }
+
+    [Fact]
+    public void HttpParser_DoesNotPromoteCatalogedNonHttpProductFromServerHeader()
+    {
+        var result = RemoteFingerprintParser.AnalyzeHttpResponse(
+            "HTTP/1.1 200 OK\r\nServer: Exim/4.98.2\r\n\r\n",
+            RemoteFingerprintKind.Http,
+            "passive-http-head",
+            maximumEvidenceBytes: 1_024);
+
+        Assert.Single(result.Fingerprints);
         Assert.Empty(result.ProductCandidates);
     }
 

@@ -63,6 +63,44 @@ public sealed class RemoteHostScannerTests
         Assert.Equal("9.9p1", product.Version);
     }
 
+    [Theory]
+    [InlineData("SSH-2.0-dropbear_2020.81\r\n", "Dropbear SSH", "2020.81")]
+    [InlineData("220 ProFTPD 1.3.8a Server (fixture) [127.0.0.1]\r\n", "ProFTPD", "1.3.8a")]
+    [InlineData("220 (vsFTPd 3.0.3)\r\n", "vsftpd", "3.0.3")]
+    [InlineData("220 mail.example ESMTP Exim 4.98.2 Sun, 10 Aug 2026 00:00:00 +0000\r\n", "Exim", "4.98.2")]
+    public async Task ScanAsync_LocalGreetingFixtureRetainsProtocolBoundCatalogIdentity(
+        string greeting,
+        string expectedProduct,
+        string expectedVersion)
+    {
+        var listener = StartListener(IPAddress.Loopback);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var server = ServeGreetingAsync(listener, greeting, cancellation.Token);
+        var scanner = new RemoteHostScanner(
+            new RecordingDnsResolver(IPAddress.Loopback),
+            NoConventionalProbes(),
+            _ => new RecordingRateLimiter());
+
+        RemoteHostReport report;
+        try
+        {
+            report = await scanner.ScanAsync(
+                Options("catalog-fixture.test", ListenerPort(listener)),
+                cancellation.Token);
+            await server;
+        }
+        finally
+        {
+            listener.Stop();
+        }
+
+        var product = Assert.Single(Assert.Single(report.Ports).ProductCandidates);
+        Assert.Equal(expectedProduct, product.Product);
+        Assert.Equal(expectedVersion, product.Version);
+        Assert.Equal(RemoteProductConfidence.BannerPattern, product.Confidence);
+        Assert.Equal("passive-greeting", product.Source);
+    }
+
     [Fact]
     public async Task ScanAsync_HttpHeadDoesNotFollowRedirectOrRetainBody()
     {

@@ -1,0 +1,73 @@
+name: Bug report
+description: Report reproducible incorrect behavior, a crash, or an evidence-quality problem.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove secrets, account names, private addresses, target evidence, and full local paths before submitting. Report security vulnerabilities through the private security-policy link instead.
+  - type: input
+    id: version
+    attributes:
+      label: PortCVE version
+      description: Paste the complete output of `portcve version`.
+      placeholder: portcve 0.2.0-alpha.1+...
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - Signed managed installer
+        - Signed portable ZIP
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and architecture
+      placeholder: Windows 11 24H2, x64
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command
+      description: Redact targets and paths where needed. Never include API keys or environment values.
+      render: powershell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and exit code
+      description: Include the exit code and sanitized stderr. Attach default-redacted JSON only after reviewing it.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Explain the smallest authorized/local setup that reproduces the issue.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I removed credentials, secrets, private target evidence, account names, and unnecessary local paths.
+          required: true
+        - label: This is not a confidential security vulnerability requiring private disclosure.
+          required: true
