@@ -57,6 +57,147 @@ public sealed class CliApplicationTests
         }
     }
 
+    [Fact]
+    public async Task LockAndCheckStrict_ExplicitWeakOwnerPolicyAcceptsStableProcessName()
+    {
+        var snapshot = OwnerSnapshot("agent.exe", imageSha256: null, CollectorStatus.Partial);
+        var service = new LockfileService();
+        var path = Path.Combine(Path.GetTempPath(), $"portcve-weak-owner-{Guid.NewGuid():N}.lock.json");
+        try
+        {
+            var application = new CliApplication(new FixedSnapshotBuilder(snapshot), service);
+            using var lockOutput = new StringWriter();
+            using var lockError = new StringWriter();
+
+            var lockExit = await application.RunAsync(
+                new(
+                    CommandKind.Lock,
+                    OutputPath: path,
+                    Strict: true,
+                    AllowWeakOwner: true),
+                lockOutput,
+                lockError,
+                CancellationToken.None);
+
+            Assert.Equal(ExitCodes.Success, lockExit);
+            var baseline = await service.ReadAsync(path, CancellationToken.None);
+            Assert.True(baseline.AllowWeakOwner);
+            Assert.Equal(EvidenceCompleteness.Partial, baseline.Evidence.Ownership);
+            Assert.True(baseline.IsComplete);
+
+            using var checkOutput = new StringWriter();
+            using var checkError = new StringWriter();
+            var checkExit = await application.RunAsync(
+                new(CommandKind.Check, InputPath: path, Strict: true),
+                checkOutput,
+                checkError,
+                CancellationToken.None);
+
+            Assert.Equal(ExitCodes.Success, checkExit);
+            Assert.Contains("PASS", checkOutput.ToString(), StringComparison.Ordinal);
+            Assert.Contains("stored policy accepts process-name identity", checkOutput.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Check_WeakOwnerPolicyRejectsUnknownCurrentOwnerAsIncomplete()
+    {
+        var result = await RunWeakOwnerCheckAsync(
+            OwnerSnapshot("pid-100", imageSha256: null, CollectorStatus.Partial));
+
+        Assert.Equal(ExitCodes.IncompleteEvidence, result.ExitCode);
+        Assert.Contains("INCOMPLETE", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("PASS", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Check_WeakOwnerPolicyFailsChangedProcessName()
+    {
+        var result = await RunWeakOwnerCheckAsync(
+            OwnerSnapshot("other.exe", imageSha256: null, CollectorStatus.Partial));
+
+        Assert.Equal(ExitCodes.NegativeResult, result.ExitCode);
+        Assert.Contains("ownerchanged", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("FAIL", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Check_NameOnlyBaselineToShaForSameProcessPassesWithoutUpgradingBaseline()
+    {
+        var result = await RunWeakOwnerCheckAsync(
+            OwnerSnapshot("agent.exe", new string('a', 64), CollectorStatus.Complete));
+
+        Assert.Equal(ExitCodes.Success, result.ExitCode);
+        Assert.Contains("evidenceimproved", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ownerchanged", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PASS", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Check_ShaBaselineToNameOnlyRemainsIncompleteEvenWhenPolicyAllowsWeakOwners()
+    {
+        var service = new LockfileService();
+        var baseline = service.Create(
+            OwnerSnapshot("agent.exe", new string('a', 64), CollectorStatus.Complete),
+            allowWeakOwner: true);
+        var path = Path.Combine(Path.GetTempPath(), $"portcve-strong-owner-{Guid.NewGuid():N}.lock.json");
+        try
+        {
+            await service.WriteAsync(path, baseline, overwrite: false, CancellationToken.None);
+            var application = new CliApplication(
+                new FixedSnapshotBuilder(OwnerSnapshot("agent.exe", imageSha256: null, CollectorStatus.Partial)),
+                service);
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            var exitCode = await application.RunAsync(
+                new(CommandKind.Check, InputPath: path, Json: true, Strict: true),
+                output,
+                error,
+                CancellationToken.None);
+
+            Assert.Equal(ExitCodes.IncompleteEvidence, exitCode);
+            Assert.Contains("\"allow_weak_owner\": true", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("evidence_regressed", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Check_OversizedLockfileReturnsStableUsageError()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"portcve-oversized-cli-{Guid.NewGuid():N}.lock.json");
+        try
+        {
+            await File.WriteAllBytesAsync(path, new byte[LockfileService.MaximumLockfileBytes + 1]);
+            var application = new CliApplication(
+                new FixedSnapshotBuilder(EmptySnapshot(CollectorStatus.Unavailable)),
+                new LockfileService());
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            var exitCode = await application.RunAsync(
+                new(CommandKind.Check, InputPath: path),
+                output,
+                error,
+                CancellationToken.None);
+
+            Assert.Equal(ExitCodes.UsageOrSchema, exitCode);
+            Assert.Contains("16 MiB", error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Theory]
     [InlineData(CommandKind.Doctor)]
     [InlineData(CommandKind.Watch)]
@@ -117,7 +258,8 @@ public sealed class CliApplicationTests
         var lockfileService = new LockfileService();
         var baseline = lockfileService.Create(
             baselineSnapshot,
-            includesContainerEvidence: true);
+            includesContainerEvidence: true,
+            allowWeakOwner: true);
         var path = Path.Combine(Path.GetTempPath(), $"portcve-diff-{Guid.NewGuid():N}.lock.json");
         try
         {
@@ -228,6 +370,88 @@ public sealed class CliApplicationTests
             [],
             [listener],
             [diagnostic]);
+    }
+
+    private static SystemSnapshot OwnerSnapshot(
+        string imageName,
+        string? imageSha256,
+        CollectorStatus ownerStatus)
+    {
+        var limitation = ownerStatus == CollectorStatus.Complete
+            ? Array.Empty<string>()
+            : ["Only process-name owner identity was available."];
+        var listener = new ListenerEvidence(
+            "tcp/ipv4/0.0.0.0/8443",
+            TransportProtocol.Tcp,
+            IpFamily.Ipv4,
+            "0.0.0.0",
+            8443,
+            "LISTEN",
+            BindScope.Wildcard,
+            "all IPv4 interfaces",
+            new(
+                100,
+                DateTimeOffset.UnixEpoch,
+                imageName,
+                imageSha256 is null ? null : $"C:\\Apps\\{imageName}",
+                imageSha256,
+                null,
+                null,
+                null,
+                null,
+                [],
+                false,
+                ownerStatus == CollectorStatus.Complete,
+                limitation),
+            [],
+            HostPolicyEvidence.NotEvaluated,
+            [],
+            limitation);
+        var diagnostics = ownerStatus == CollectorStatus.Complete
+            ? Array.Empty<CollectorDiagnostic>()
+            : [new("process_owners", ownerStatus, "owner_name_only", "Only process-name owner identity was available.")];
+        return new(
+            1,
+            "test",
+            DateTimeOffset.UnixEpoch,
+            1,
+            "Windows",
+            [
+                new("sockets", CollectorStatus.Complete, DateTimeOffset.UnixEpoch, 1, []),
+                new("process_owners", ownerStatus, DateTimeOffset.UnixEpoch, 1, diagnostics),
+                new("interfaces", CollectorStatus.Complete, DateTimeOffset.UnixEpoch, 1, []),
+                new("docker", CollectorStatus.Unavailable, DateTimeOffset.UnixEpoch, 1, []),
+            ],
+            [],
+            [listener],
+            diagnostics);
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunWeakOwnerCheckAsync(
+        SystemSnapshot currentSnapshot)
+    {
+        var service = new LockfileService();
+        var baseline = service.Create(
+            OwnerSnapshot("agent.exe", imageSha256: null, CollectorStatus.Partial),
+            allowWeakOwner: true);
+        var path = Path.Combine(Path.GetTempPath(), $"portcve-weak-check-{Guid.NewGuid():N}.lock.json");
+        try
+        {
+            await service.WriteAsync(path, baseline, overwrite: false, CancellationToken.None);
+            var application = new CliApplication(new FixedSnapshotBuilder(currentSnapshot), service);
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            var exitCode = await application.RunAsync(
+                new(CommandKind.Check, InputPath: path, Strict: true),
+                output,
+                error,
+                CancellationToken.None);
+            return (exitCode, output.ToString());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     private static SystemSnapshot EmptySnapshot(CollectorStatus dockerStatus) => new(

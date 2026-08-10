@@ -82,12 +82,28 @@ public sealed class CliParserTests
     public void Parse_PrivacyAndBaselineFlags_AreWired()
     {
         var result = CliParser.Parse(
-            ["lock", "--include-private", "--resolve-accounts", "--include-udp", "--allow-incomplete"]);
+            ["lock", "--include-private", "--resolve-accounts", "--include-udp", "--allow-incomplete", "--allow-weak-owner"]);
 
         Assert.True(result.IncludePrivate);
         Assert.True(result.ResolveAccounts);
         Assert.True(result.IncludeUdp);
         Assert.True(result.AllowIncomplete);
+        Assert.True(result.AllowWeakOwner);
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("check", "baseline.json")]
+    [InlineData("diff", "baseline.json")]
+    [InlineData("scan", "tcp:443")]
+    public void Parse_AllowWeakOwnerIsRestrictedToLockCreation(params string[] command)
+    {
+        var arguments = command.Append("--allow-weak-owner").ToArray();
+
+        var error = Assert.Throws<CliUsageException>(() => CliParser.Parse(arguments));
+
+        Assert.Contains("only", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("lockfile", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -107,12 +123,17 @@ public sealed class CliParserTests
     }
 
     [Fact]
-    public void Parse_ScanAll_IsTcpOnly()
+    public void Parse_ScanAllWithGate_IsTcpOnlyAndWiresPolicy()
     {
-        var result = CliParser.Parse(["scan", "--all"]);
+        var result = CliParser.Parse(["scan", "--all", "--fail-on", "high", "--strict", "--json"]);
 
         Assert.True(result.All);
         Assert.Equal(TransportProtocol.Tcp, result.Protocol);
+        Assert.Equal(VulnerabilitySeverity.High, result.FailOn);
+        Assert.True(result.Strict);
+        Assert.True(result.Json);
+        Assert.Null(result.Port);
+        Assert.Null(result.SbomPath);
     }
 
     [Theory]

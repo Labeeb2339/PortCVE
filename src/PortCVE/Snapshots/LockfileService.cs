@@ -8,6 +8,9 @@ namespace PortCVE.Snapshots;
 
 public sealed class LockfileService
 {
+    internal const int MaximumLockfileBytes = 16 * 1024 * 1024;
+    internal const int MaximumListenerCount = 50_000;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -21,7 +24,8 @@ public sealed class LockfileService
         bool includesUdp = false,
         bool includesHostPolicy = false,
         LockfileSelector? selector = null,
-        bool includesContainerEvidence = false)
+        bool includesContainerEvidence = false,
+        bool allowWeakOwner = false)
     {
         var listeners = snapshot.Listeners
             .Select(ToLockedListener)
@@ -56,7 +60,8 @@ public sealed class LockfileService
             includesUdp,
             selector ?? new(null, null, null, null),
             evidence,
-            listeners);
+            listeners,
+            allowWeakOwner);
     }
 
     public async Task WriteAsync(
@@ -107,7 +112,7 @@ public sealed class LockfileService
     public async Task<ListenerLockfile> ReadAsync(string path, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        await using var stream = File.OpenRead(Path.GetFullPath(path));
+        using var stream = await ReadBoundedAsync(Path.GetFullPath(path), cancellationToken);
         var result = await JsonSerializer.DeserializeAsync<ListenerLockfile>(stream, JsonOptions, cancellationToken)
             ?? throw new InvalidDataException("The lockfile is empty or invalid.");
 
@@ -129,6 +134,12 @@ public sealed class LockfileService
 
     private static void Validate(ListenerLockfile lockfile)
     {
+        if (lockfile.Listeners.Count > MaximumListenerCount)
+        {
+            throw new InvalidDataException(
+                $"Lockfile contains more than {MaximumListenerCount:N0} listeners.");
+        }
+
         if (string.IsNullOrWhiteSpace(lockfile.CreatedBy))
         {
             throw new InvalidDataException("Lockfile created_by must not be blank.");
@@ -206,6 +217,54 @@ public sealed class LockfileService
         }
     }
 
+    private static async Task<MemoryStream> ReadBoundedAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        await using var source = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (source.Length > MaximumLockfileBytes)
+        {
+            throw new InvalidDataException("Lockfile exceeds the 16 MiB input limit.");
+        }
+
+        var output = new MemoryStream((int)source.Length);
+        try
+        {
+            var buffer = new byte[81920];
+            var total = 0;
+            while (true)
+            {
+                var read = await source.ReadAsync(buffer, cancellationToken);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                total += read;
+                if (total > MaximumLockfileBytes)
+                {
+                    throw new InvalidDataException("Lockfile exceeds the 16 MiB input limit.");
+                }
+
+                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            }
+
+            output.Position = 0;
+            return output;
+        }
+        catch
+        {
+            output.Dispose();
+            throw;
+        }
+    }
+
     public static LockedListener ToLockedListener(ListenerEvidence listener)
     {
         var (ownerIdentity, strength) = OwnerIdentity(listener);
@@ -229,7 +288,10 @@ public sealed class LockfileService
             ownerIdentity,
             strength,
             listener.HostPolicy.Confidence,
-            listener.HostPolicy.Verdict);
+            listener.HostPolicy.Verdict)
+        {
+            ObservedOwnerNameIdentity = ProcessNameIdentity(listener.Owner),
+        };
     }
 
     private static (string Identity, OwnerIdentityStrength Strength) OwnerIdentity(ListenerEvidence listener)
@@ -271,6 +333,12 @@ public sealed class LockfileService
 
         return ("unknown", OwnerIdentityStrength.Unknown);
     }
+
+    private static string? ProcessNameIdentity(OwnerEvidence owner) =>
+        !string.IsNullOrWhiteSpace(owner.ImageName)
+        && !owner.ImageName.StartsWith("pid-", StringComparison.Ordinal)
+            ? $"process:{owner.ImageName.ToLowerInvariant()}"
+            : null;
 
     public static JsonSerializerOptions SerializerOptions => JsonOptions;
 }

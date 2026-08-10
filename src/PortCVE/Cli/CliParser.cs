@@ -28,6 +28,7 @@ public static class CliParser
         var strict = false;
         var force = false;
         var allowIncomplete = false;
+        var allowWeakOwner = false;
         var includeUdp = false;
         var includePrivate = false;
         var resolveAccounts = false;
@@ -145,6 +146,9 @@ public static class CliParser
                     break;
                 case "--allow-incomplete":
                     allowIncomplete = true;
+                    break;
+                case "--allow-weak-owner":
+                    allowWeakOwner = true;
                     break;
                 case "--include-udp":
                     includeUdp = true;
@@ -396,6 +400,11 @@ public static class CliParser
                 + "--read-timeout, and --max-hosts are available only with scan-host.");
         }
 
+        if (command != CommandKind.Lock && allowWeakOwner)
+        {
+            throw new CliUsageException("--allow-weak-owner is available only when creating a lockfile.");
+        }
+
         if (command == CommandKind.Lock)
         {
             if (process is not null || scope is not null)
@@ -448,7 +457,8 @@ public static class CliParser
             connectTimeout,
             readTimeout,
             maximumHosts,
-            importFormat);
+            importFormat,
+            allowWeakOwner);
     }
 
     private static string RequireValue(IReadOnlyList<string> arguments, ref int index, string option)

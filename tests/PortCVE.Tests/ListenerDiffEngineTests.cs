@@ -86,6 +86,85 @@ public sealed class ListenerDiffEngineTests
         Assert.Contains("container-backed", change.Summary, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Compare_NameOnlyToShaForSameObservedProcessIsEvidenceImprovementNotOwnerChange()
+    {
+        var before = Listener("tcp/ipv4/0.0.0.0/8080", "process:web.exe", BindScope.Wildcard);
+        var after = before with
+        {
+            OwnerIdentity = $"sha256:{new string('a', 64)}",
+            OwnerIdentityStrength = OwnerIdentityStrength.Sha256,
+            ObservedOwnerNameIdentity = "process:web.exe",
+        };
+
+        var change = Assert.Single(ListenerDiffEngine.Compare([before], [after]));
+
+        Assert.Equal(ListenerChangeKind.EvidenceImproved, change.Kind);
+        Assert.DoesNotContain("owner changed", change.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Compare_NameOnlyToShaForDifferentObservedProcessIsOwnerChange()
+    {
+        var before = Listener("tcp/ipv4/0.0.0.0/8080", "process:web.exe", BindScope.Wildcard);
+        var after = before with
+        {
+            OwnerIdentity = $"sha256:{new string('a', 64)}",
+            OwnerIdentityStrength = OwnerIdentityStrength.Sha256,
+            ObservedOwnerNameIdentity = "process:other.exe",
+        };
+
+        var change = Assert.Single(ListenerDiffEngine.Compare([before], [after]));
+
+        Assert.Equal(ListenerChangeKind.OwnerChanged, change.Kind);
+    }
+
+    [Fact]
+    public void Compare_ShaToNameOnlyRemainsEvidenceRegression()
+    {
+        var before = Listener("tcp/ipv4/0.0.0.0/8080", $"sha256:{new string('a', 64)}", BindScope.Wildcard) with
+        {
+            OwnerIdentityStrength = OwnerIdentityStrength.Sha256,
+        };
+        var after = Listener("tcp/ipv4/0.0.0.0/8080", "process:web.exe", BindScope.Wildcard);
+
+        var change = Assert.Single(ListenerDiffEngine.Compare([before], [after]));
+
+        Assert.Equal(ListenerChangeKind.EvidenceRegressed, change.Kind);
+    }
+
+    [Fact]
+    public void Compare_NameOnlyToContainerIdentityRemainsOwnerChange()
+    {
+        var before = Listener("tcp/ipv4/0.0.0.0/8080", "process:docker.exe", BindScope.Wildcard);
+        var after = before with
+        {
+            OwnerIdentity = "container-image-set:digest",
+            OwnerIdentityStrength = OwnerIdentityStrength.ContainerImage,
+            ObservedOwnerNameIdentity = "process:docker.exe",
+        };
+
+        var change = Assert.Single(ListenerDiffEngine.Compare([before], [after]));
+
+        Assert.Equal(ListenerChangeKind.OwnerChanged, change.Kind);
+        Assert.Contains("container-backed", change.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Compare_NameOnlyToShaWithNarrowerScopeDoesNotBecomeRemoveAndAdd()
+    {
+        var before = Listener("tcp/ipv4/0.0.0.0/8080", "process:web.exe", BindScope.Wildcard);
+        var after = Listener("tcp/ipv4/127.0.0.1/8080", $"sha256:{new string('a', 64)}", BindScope.Loopback) with
+        {
+            OwnerIdentityStrength = OwnerIdentityStrength.Sha256,
+            ObservedOwnerNameIdentity = "process:web.exe",
+        };
+
+        var change = Assert.Single(ListenerDiffEngine.Compare([before], [after]));
+
+        Assert.Equal(ListenerChangeKind.ExposureNarrowed, change.Kind);
+    }
+
     private static LockedListener Listener(
         string key,
         string owner,

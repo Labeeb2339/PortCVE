@@ -28,6 +28,28 @@ public sealed class SchemaContractTests
     }
 
     [Fact]
+    public void WeakOwnerPolicyLockfileShapeMatchesPublishedSchema()
+    {
+        var snapshot = Snapshot();
+        var listener = snapshot.Listeners[0] with
+        {
+            Owner = snapshot.Listeners[0].Owner with { ImageSha256 = null },
+            ContainerExposures = [],
+        };
+        var lockfile = new LockfileService().Create(
+            snapshot with { Listeners = [listener] },
+            includesHostPolicy: true,
+            allowWeakOwner: true);
+        var json = JsonOutput.Serialize(lockfile);
+
+        Assert.Equal(OwnerIdentityStrength.NameOnly, Assert.Single(lockfile.Listeners).OwnerIdentityStrength);
+        Assert.Equal(EvidenceCompleteness.Partial, lockfile.Evidence.Ownership);
+        Assert.True(lockfile.IsComplete);
+        Assert.Contains("\"allow_weak_owner\": true", json, StringComparison.Ordinal);
+        AssertSerializedShape(json, "portcve.lock.v1.schema.json");
+    }
+
+    [Fact]
     public void PrivateAndRedactedSnapshotShapesMatchPublishedSchema()
     {
         var snapshot = Snapshot();
@@ -45,6 +67,32 @@ public sealed class SchemaContractTests
     {
         var report = VulnerabilityReportFixture();
 
+        AssertSerializedShape(
+            JsonOutput.Serialize(report),
+            "portcve.vulnerability.v1.schema.json");
+        AssertSerializedShape(
+            JsonOutput.Serialize(VulnerabilityReportRedactor.Redact(report)),
+            "portcve.vulnerability.v1.schema.json");
+    }
+
+    [Fact]
+    public async Task ScanAllMixedHostPrivateAndRedactedShapesMatchPublishedSchema()
+    {
+        var imageId = $"sha256:{new string('a', 64)}";
+        var report = await new VulnerabilityAssessmentService(
+            new VulnerabilityAssessmentTests.FixedScanner(
+                VulnerabilityAssessmentTests.CompleteResult(VulnerabilitySeverity.Medium))).AssessAsync(
+            "test",
+            "all_tcp_listeners",
+            [
+                VulnerabilityAssessmentTests.Listener(8080, imageId, "web", "example/web:1"),
+                VulnerabilityAssessmentTests.Listener(9000, null, null, null),
+            ],
+            null,
+            VulnerabilitySelectionMode.AllScanCapableSubjects,
+            CancellationToken.None);
+
+        Assert.True(report.Summary.IsComplete);
         AssertSerializedShape(
             JsonOutput.Serialize(report),
             "portcve.vulnerability.v1.schema.json");

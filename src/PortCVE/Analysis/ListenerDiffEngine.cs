@@ -59,7 +59,7 @@ public static class ListenerDiffEngine
             // Remove exact matches first so legitimate shared/reused UDP binds are compared as a multiset.
             for (var oldIndex = unmatchedOld.Count - 1; oldIndex >= 0; oldIndex--)
             {
-                var exactIndex = unmatchedNew.FindIndex(item => item == unmatchedOld[oldIndex]);
+                var exactIndex = unmatchedNew.FindIndex(item => StoredFieldsEqual(item, unmatchedOld[oldIndex]));
                 if (exactIndex >= 0)
                 {
                     unmatchedOld.RemoveAt(oldIndex);
@@ -71,7 +71,7 @@ public static class ListenerDiffEngine
             {
                 var oldItem = unmatchedOld[0];
                 var preferredIndex = unmatchedNew.FindIndex(item =>
-                    string.Equals(item.OwnerIdentity, oldItem.OwnerIdentity, StringComparison.OrdinalIgnoreCase));
+                    OwnersEquivalentForComparison(oldItem, item));
                 if (preferredIndex < 0)
                 {
                     preferredIndex = 0;
@@ -112,7 +112,7 @@ public static class ListenerDiffEngine
                 candidate.After!.Protocol == oldItem.Protocol
                 && candidate.After.Family == oldItem.Family
                 && candidate.After.Port == oldItem.Port
-                && string.Equals(candidate.After.OwnerIdentity, oldItem.OwnerIdentity, StringComparison.OrdinalIgnoreCase)
+                && OwnersEquivalentForComparison(oldItem, candidate.After)
                 && candidate.After.Scope != oldItem.Scope);
             if (newChange is null)
             {
@@ -186,15 +186,26 @@ public static class ListenerDiffEngine
             changes.Add(new(ListenerChangeKind.OwnerChanged, key, oldItem, newItem,
                 $"container-backed owner changed from {oldItem.OwnerIdentity} to {newItem.OwnerIdentity}"));
         }
+        else if (oldItem.OwnerIdentityStrength != OwnerIdentityStrength.ContainerImage
+            && newItem.OwnerIdentityStrength == OwnerIdentityStrength.ContainerImage)
+        {
+            changes.Add(new(ListenerChangeKind.OwnerChanged, key, oldItem, newItem,
+                $"owner changed from {oldItem.OwnerIdentity} to container-backed {newItem.OwnerIdentity}"));
+        }
         else if (OwnerStrengthRank(newItem.OwnerIdentityStrength) < OwnerStrengthRank(oldItem.OwnerIdentityStrength))
         {
             changes.Add(new(ListenerChangeKind.EvidenceRegressed, key, oldItem, newItem,
                 $"owner evidence regressed from {oldItem.OwnerIdentityStrength} to {newItem.OwnerIdentityStrength}"));
         }
-        else if (!string.Equals(oldItem.OwnerIdentity, newItem.OwnerIdentity, StringComparison.OrdinalIgnoreCase))
+        else if (!OwnersEquivalentForComparison(oldItem, newItem))
         {
             changes.Add(new(ListenerChangeKind.OwnerChanged, key, oldItem, newItem,
                 $"owner changed from {oldItem.OwnerIdentity} to {newItem.OwnerIdentity}"));
+        }
+        else if (OwnerStrengthRank(newItem.OwnerIdentityStrength) > OwnerStrengthRank(oldItem.OwnerIdentityStrength))
+        {
+            changes.Add(new(ListenerChangeKind.EvidenceImproved, key, oldItem, newItem,
+                $"owner evidence improved from {oldItem.OwnerIdentityStrength} to {newItem.OwnerIdentityStrength}"));
         }
 
         if (oldItem.Scope != newItem.Scope && newItem.Scope == BindScope.Unknown)
@@ -237,6 +248,35 @@ public static class ListenerDiffEngine
 
     private static string StableIdentity(LockedListener item) =>
         $"{item.OwnerIdentity}\0{item.OwnerIdentityStrength}\0{item.Scope}\0{item.HostPolicy}\0{item.HostPolicyConfidence}";
+
+    private static bool StoredFieldsEqual(LockedListener left, LockedListener right) =>
+        left.Key == right.Key
+        && left.Protocol == right.Protocol
+        && left.Family == right.Family
+        && left.Address == right.Address
+        && left.Port == right.Port
+        && left.Scope == right.Scope
+        && left.OwnerIdentity == right.OwnerIdentity
+        && left.OwnerIdentityStrength == right.OwnerIdentityStrength
+        && left.HostPolicyConfidence == right.HostPolicyConfidence
+        && left.HostPolicy == right.HostPolicy;
+
+    private static bool OwnersEquivalentForComparison(LockedListener before, LockedListener after)
+    {
+        if (string.Equals(before.OwnerIdentity, after.OwnerIdentity, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return before.OwnerIdentityStrength == OwnerIdentityStrength.NameOnly
+            && after.OwnerIdentityStrength != OwnerIdentityStrength.ContainerImage
+            && OwnerStrengthRank(after.OwnerIdentityStrength) > OwnerStrengthRank(OwnerIdentityStrength.NameOnly)
+            && !string.IsNullOrWhiteSpace(after.ObservedOwnerNameIdentity)
+            && string.Equals(
+                before.OwnerIdentity,
+                after.ObservedOwnerNameIdentity,
+                StringComparison.OrdinalIgnoreCase);
+    }
 
     private static void CompareEvidenceField(
         string name,

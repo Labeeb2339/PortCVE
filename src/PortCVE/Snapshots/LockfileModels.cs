@@ -42,7 +42,11 @@ public sealed record LockedListener(
     string OwnerIdentity,
     OwnerIdentityStrength OwnerIdentityStrength,
     Confidence HostPolicyConfidence,
-    FirewallVerdict HostPolicy);
+    FirewallVerdict HostPolicy)
+{
+    [JsonIgnore]
+    internal string? ObservedOwnerNameIdentity { get; init; }
+}
 
 public sealed record ListenerLockfile(
     int SchemaVersion,
@@ -50,14 +54,34 @@ public sealed record ListenerLockfile(
     bool IncludesUdp,
     LockfileSelector Selector,
     LockfileEvidence Evidence,
-    IReadOnlyList<LockedListener> Listeners)
+    IReadOnlyList<LockedListener> Listeners,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    bool AllowWeakOwner = false)
 {
     public const int CurrentSchemaVersion = 1;
 
     [JsonIgnore]
+    public bool HasSufficientOwnerEvidence =>
+        (Evidence.Ownership == EvidenceCompleteness.Complete
+            && Listeners.All(static listener => IsStrongOwner(listener.OwnerIdentityStrength)))
+        || (AllowWeakOwner
+            && Evidence.Ownership == EvidenceCompleteness.Partial
+            && Listeners.Any(static listener => listener.OwnerIdentityStrength == OwnerIdentityStrength.NameOnly)
+            && Listeners.All(static listener => HasAtLeastNameOnlyOwner(listener.OwnerIdentityStrength)));
+
+    [JsonIgnore]
     public bool IsComplete =>
-        Evidence.Ownership == EvidenceCompleteness.Complete
+        HasSufficientOwnerEvidence
         && Evidence.BindScope == EvidenceCompleteness.Complete
         && Evidence.HostPolicy is EvidenceCompleteness.Complete or EvidenceCompleteness.NotCollected
         && Evidence.Containers is EvidenceCompleteness.Complete or EvidenceCompleteness.NotCollected;
+
+    private static bool IsStrongOwner(OwnerIdentityStrength strength) => strength is
+        OwnerIdentityStrength.Sha256
+        or OwnerIdentityStrength.ContainerImage
+        or OwnerIdentityStrength.Service
+        or OwnerIdentityStrength.Kernel;
+
+    private static bool HasAtLeastNameOnlyOwner(OwnerIdentityStrength strength) =>
+        strength != OwnerIdentityStrength.Unknown;
 }

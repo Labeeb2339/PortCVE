@@ -74,6 +74,8 @@ portcve check listeners.lock.json --strict
 
 `check` fails on new listeners, owner changes, wider binds, or more-permissive host-policy results. Incomplete evidence returns exit code `3` rather than a clean pass.
 
+If baseline creation is blocked only by protected processes with readable image names, `lock --allow-weak-owner` stores an explicit name-only policy. This is weaker than a hash or exact service identity and cannot detect a different binary using the same filename; unknown owners still prevent a pass.
+
 ### Check known advisories
 
 PortCVE uses Trivy as an optional external scanner. Install Trivy separately, verify its published checksum, set `PORTCVE_TRIVY_PATH`, and initialize a dedicated local cache:
@@ -84,6 +86,8 @@ portcve db status
 portcve scan tcp:8080 --strict
 portcve scan --all --fail-on high
 ```
+
+`--all` scans each distinct Docker image ID mapped to a TCP listener. It does not guess products for unrelated native Windows listeners; if no scan-capable image is present, the command returns exit code `3`.
 
 For an explicit CycloneDX or SPDX SBOM:
 

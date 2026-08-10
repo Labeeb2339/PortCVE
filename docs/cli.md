@@ -14,7 +14,7 @@ portcve lock [--output <path>]       Write a normalized baseline
 portcve diff <lockfile>              Show current drift from a baseline
 portcve check <lockfile>             Gate security-relevant drift
 portcve scan <tcp:port>              Check exact subjects for one TCP listener
-portcve scan --all                   Check exact Docker image IDs for all TCP listeners
+portcve scan --all                   Check all mapped Docker image IDs
 portcve db status                    Inspect local Trivy and database freshness offline
 portcve db update                    Explicitly download and validate the Trivy database
 portcve scan-host <target> --authorized  Scan an authorized host or IPv4 CIDR
@@ -38,7 +38,7 @@ The scanner launches a separately installed Trivy executable without a shell, se
 
 | Option | Behavior |
 | --- | --- |
-| `--all` | Select every observed TCP listener and deduplicate exact Docker subjects by immutable image ID. |
+| `--all` | Inspect every observed TCP listener, then scan each distinct immutable Docker image ID that can be mapped. Unrelated native listeners are not guessed into subjects. No eligible image returns exit `3`. |
 | `--sbom <path>` | Add one explicit SBOM subject to an exact-port scan. UNC paths, mapped network drives, and paths traversing reparse points are rejected before collection. The file is hashed before and after scanning; changed input findings are discarded and cannot produce a successful scan. |
 | `--fail-on high` | Exit `1` for a high or critical known-advisory match. |
 | `--fail-on critical` | Exit `1` for a critical known-advisory match. |
@@ -138,10 +138,15 @@ Import output always follows `schema/portcve.import.v1.schema.json`. Use `-o, --
 | --- | --- |
 | `--include-udp` | Include UDP in `lock` and `watch`. TCP-only is the default because connectionless, duplicate, and short-lived UDP binds can create noisy baseline churn. A protocol-specific UDP lock also records `includes_udp: true`. |
 | `--allow-incomplete` | Permit `lock` to write a baseline with incomplete ownership, bind-scope, requested host-policy, or requested container evidence. Such a file is useful for manual diffing but cannot make `check` pass while evidence remains incomplete. |
+| `--allow-weak-owner` | At `lock` creation only, store an explicit policy that permits `name_only` owner identity to support `diff` and `check`. The flag is not accepted by `diff` or `check`; those commands inherit the stored policy. `unknown` owners remain incomplete. |
 | `-o, --output <path>` | Write a lockfile or snapshot to a path. The default lockfile is `listeners.lock.json`. |
 | `--force` | Replace an existing lockfile or snapshot instead of failing with exit code `2`. |
 
-Lockfiles omit PIDs, timestamps, command lines, environment variables, account names, full paths, container IDs, container names, and raw image references. They store normalized owner identity strength, host-policy confidence, evidence-completeness metadata, the selector, and whether UDP was included.
+Lockfiles omit PIDs, timestamps, command lines, environment variables, account names, full paths, container IDs, container names, and raw image references. They store normalized owner identity strength, host-policy confidence, evidence-completeness metadata, the selector, the weak-owner policy, and whether UDP was included. Lockfile input is limited to 16 MiB and 50,000 listener records before it can be used by `diff` or `check`; exceeding either limit is an invalid-lockfile/schema error with exit code `2`.
+
+By default, a passing baseline requires every selected listener to have `sha256`, `container_image`, exact `service`, or `kernel` owner identity. `--allow-weak-owner` is a narrower alternative to `--allow-incomplete`: it can make a baseline/check decision-capable when every selected listener has at least a stable process image name and every bind-scope, requested firewall, and requested container evidence dimension is sufficient. The lockfile still records `evidence.ownership: partial`; it also records `allow_weak_owner: true`, so the weaker decision policy is visible and inherited. Human and JSON `diff`/`check` output identify the stored policy. A missing policy field means `false`, and ordinary strong lockfiles omit it.
+
+The weak policy never accepts `unknown`, never converts `name_only` into strong evidence, and never masks a later strong-to-weak, bind-scope, firewall, or container regression. A current SHA-256/service/kernel identity with the same observed process name is reported as improved evidence rather than a false owner change, but it does not ratchet the stored baseline; review and recreate the lockfile to adopt stronger evidence. A newly correlated `container_image` identity remains an owner change. Most importantly, a name-only baseline cannot distinguish a different binary using the same image name. Prefer an elevated strong baseline when that replacement threat matters.
 
 `evidence.containers` is `complete` when the Docker Engine answered successfully, including when it reported no running published ports. A normally absent Docker pipe is `not_collected`, so non-Docker hosts do not need `--allow-incomplete`. Access denial, timeout, malformed response, or collector failure is `partial` for a container-aware capture. Correlated endpoints use `container_image` owner strength and a deterministic `container-image-set:<sha256>` identity when every correlated publication supplies an image ID; otherwise owner identity falls back to the observed host process/service rules. `diff` and `check` recollect Docker evidence when the baseline's container evidence was collected.
 
