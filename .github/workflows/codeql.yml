@@ -30,7 +30,7 @@ jobs:
           dotnet-version: 10.0.101
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3.37.6
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           languages: csharp
           build-mode: manual
@@ -42,6 +42,6 @@ jobs:
         run: dotnet build PortCVE.sln -c Release --no-restore
 
       - name: Analyze
-        uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3.37.6
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           category: /language:csharp
