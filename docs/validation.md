@@ -91,10 +91,10 @@ Detailed behavior and the narrower adaptive-TLS limitation are recorded in [remo
 
 ## Daily-readiness integration — 2026-08-10
 
-The current `0.2.0-alpha.1` development tree was rebuilt and exercised on Windows `10.0.26200.0` x64 as a standard user:
+The current `0.3.0-alpha.1` development tree was rebuilt and exercised on Windows `10.0.26200.0` x64 as a standard user:
 
 - locked restore, repository-wide formatting verification, and Release build passed with zero warnings or errors;
-- the full .NET suite passed `386/386`, including socket churn, importer caps/redaction, remote authorization/rate/timeout gates, corrupt-database rejection, and schema contracts;
+- the full .NET suite passed `512/512`, including socket churn, importer caps/redaction, remote authorization/rate/timeout gates, corrupt-database rejection, scanner-to-owner correlation, and schema contracts;
 - the Windows PowerShell 5.1 installer lifecycle harness passed `66` checks for clean install, managed update, failure rollback, exact-version rollback, receipt/hash tamper rejection, guarded `PATH` handling, and offline uninstall;
 - the self-contained publish produced exactly one `portcve.exe`, with no PDB or local build path embedded; it remains intentionally unsigned because no verified publisher credential has been configured;
 - the Docker Desktop `28.3.2` fixture passed real TCP and UDP echo, Windows CIM tuple confirmation, default redaction, TCP/UDP lock-and-check, and an authorized scan of the temporary loopback-forwarded TCP port with no false product identity; cleanup left zero labelled containers or integration temp directories;
@@ -104,9 +104,27 @@ The current `0.2.0-alpha.1` development tree was rebuilt and exercised on Window
 - the pinned local `docker/welcome-to-docker` image again produced `87` known-advisory matches (`3` critical and `17` high), while `--fail-on high` returned exit `1` and default JSON omitted the immutable image ID; and
 - current NuGet sources reported no known vulnerable direct or transitive package in either project.
 
-The performance harness passed its enforced budgets with ten local-inventory iterations over `144` observed endpoints (`203 ms` median, `215 ms` p95), a passive authorized loopback report covering `1,000` requested ports in `1,206 ms`, and `51.7 MiB` peak working set. These figures describe this host and run only; they are regression evidence, not universal performance guarantees.
+The performance harness passed its enforced CI-sized budgets with five local-inventory iterations over `161` observed endpoints (`219 ms` median, `227 ms` p95), a passive authorized loopback report covering `256` requested ports in `450 ms`, and `46.2 MiB` peak working set. These figures describe this host and run only; they are regression evidence, not universal performance guarantees.
 
 Fresh Windows Server 2022 and 2025 CI jobs, each including the live loopback and smaller performance harness, are configured in `.github/workflows/ci.yml`. Compatibility is claimed only after those jobs pass on the published commit.
+
+## Scanner-to-owner verification — 2026-08-10
+
+- A disposable PowerShell TCP listener bound to an OS-assigned wildcard port on the local Windows host.
+- Synthetic Nmap XML reported that port open for an imported address; separate Nuclei JSONL and Nessus XML records reported the same synthetic CVE.
+- `portcve verify --strict --no-firewall` correlated the imported open port to the live wildcard listener and retained a SHA-256 owner identity for `powershell.exe`.
+- The two scanner records were grouped into one finding with two distinct provenance observations; exploitability remained `not_assessed`.
+- Default JSON removed the imported target, local address, owner hash, and scanner text containing those values. Private JSON retained the evidence for controlled local review.
+- Both strict default/private runs returned exit `0`. The listener accepted no application connection because `verify` performs no remote traffic.
+- The static PowerShell safety harness passed `40/40`; cleanup left no fixture listener or harness temporary directory.
+
+The reproducible command is:
+
+```powershell
+.\scripts\Test-ExposureVerificationIntegration.ps1
+```
+
+Detailed fixture boundaries are recorded in [verify-live-validation.md](verify-live-validation.md).
 
 ## Limitations
 

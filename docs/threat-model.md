@@ -35,6 +35,8 @@ Lockfiles are user-provided data. Their schema is validated before comparison, b
 - DNS rebinding, oversized CIDR/port expansion, slow services, control characters, and cross-protocol banner spoofing
 - Misleading or conditional NVD configuration trees, incomplete enrichment status, rate-limit responses, and identity/CPE mismatch
 - Malformed or oversized Nmap XML and Nuclei JSONL, including XXE and secret-bearing raw request/response fields
+- Malformed or oversized Nessus XML and secret-bearing raw plugin output
+- Incorrect scanner-to-host association, ambiguous hostname selection, stale scan evidence, and NAT/forwarding mismatches
 
 ## Out of scope
 
@@ -45,6 +47,7 @@ Lockfiles are user-provided data. Their schema is validated before comparison, b
 - WSL guest-process or Kubernetes workload attribution
 - Router, NAT, VPN gateway, cloud security group, or remote-host behavior
 - Proving that a port is reachable from the Internet
+- Independently verifying the operator-supplied scanner vantage or imported-target association
 - Safely executing an untrusted binary
 - Proving a known advisory is exploitable, reachable through the selected port, or applicable to code loaded at runtime
 - Proving that a version-bearing greeting was not deliberately spoofed or rewritten by an intermediary
@@ -79,6 +82,9 @@ Lockfiles are user-provided data. Their schema is validated before comparison, b
 - NVD output preserves configuration/applicability and enrichment status. Compound cofactors are conditional, negated or insufficient applicability is inconclusive, and every result keeps `exploitability: not_assessed`. At most 64 unique catalog-backed identities are queried per run, and repeated endpoint observations reference one normalized provider result instead of duplicating attacker-amplifiable CVE payloads.
 - Default remote JSON replaces diagnostic messages with scope-specific safe text while retaining diagnostic codes; raw endpoint-formatted exception text and remote-controlled `Allow` header values remain private-only.
 - Nmap and Nuclei support is import-only. Their files are untrusted local inputs, cannot traverse network/reparse paths, are size/count/depth/retained-output bounded, and never cause PortCVE to execute scanners, templates, URLs, requests, responses, or curl commands. XML structure is matched by canonical unqualified parent paths so nested lookalike elements cannot forge endpoints or successful completion. Default normalized output removes URL credentials/query/fragment/token-like components and does not retain NSE output, extracted results, raw requests/responses, curl commands, or template content.
+- Nessus support is import-only. Only canonical report/host/item structure is accepted; raw plugin output, credentials, and unrelated host properties are discarded. Malformed or dropped records make the import incomplete.
+- `verify` performs no remote traffic. It requires an explicit imported target, rejects ambiguous selection, preserves every matching local listener, and treats the vantage and target-to-host association as operator assertions. Time skew, proxies, NAT, forwarding, and stopped services remain limitations rather than being converted into false-positive or reachability claims.
+- A `correlated_open` endpoint means only that imported open-port evidence and a current non-loopback bind agree on the mapped protocol/port. It does not prove packet-path identity, current reachability, vulnerability applicability, or exploitability.
 
 ## Privacy modes
 
@@ -95,3 +101,5 @@ Account-name resolution is off by default. `--resolve-accounts` uses Windows `Lo
 Vulnerability JSON is redacted by default. It retains advisory IDs, package names and versions, severities, fix metadata, selected ports, bind scope, and database freshness because those are the report's operational content. It replaces Docker image references and SBOM names, omits artifact IDs/hashes, normalizes listener keys, and sanitizes free-form limitations and diagnostics. `--include-private` can expose local SBOM paths, immutable image IDs, image references, and detailed scanner diagnostics; review it before sharing.
 
 Remote JSON is also redacted by default. It replaces selector/target/address values with run-local aliases, clears raw greeting and HTTP/TLS evidence, and drops identity-bearing fingerprint attributes while retaining ports, protocol/service categories, parsed product/version candidates, CPEs, advisory IDs, severity, applicability, and limitations. `--include-private` retains frozen addresses, hostnames, raw bounded evidence, certificate identity, and other potentially sensitive assessment metadata.
+
+Verification JSON is redacted by default and declares `privacy_mode: reduced`. It aliases the imported target and vantage, removes imported hostnames and exact local addresses, replaces input and finding-record hashes with a schema-valid zero digest, masks owner/container image identities, and replaces detailed diagnostics and limitations. Private output declares `privacy_mode: private`. Both retain external/local ports, process and service names, owner evidence strength, policy result, advisory IDs, scanner source labels, and correlation states. Those fields remain sensitive assessment metadata and must be reviewed before sharing.

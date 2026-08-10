@@ -6,6 +6,7 @@ using PortCVE.Remote.Advisories;
 using PortCVE.Remote.Imports;
 using PortCVE.Snapshots;
 using PortCVE.Vulnerabilities;
+using PortCVE.Verification;
 
 namespace PortCVE.Tests;
 
@@ -207,6 +208,42 @@ public sealed class SchemaContractTests
     }
 
     [Fact]
+    public void NessusEvidenceImportShapeMatchesPublishedSchema()
+    {
+        var document = new PentestImportDocument(
+            PentestImportDocument.CurrentSchemaVersion,
+            "test",
+            DateTimeOffset.UnixEpoch,
+            new("assessment.nessus", 456, new string('c', 64)),
+            "nessus_xml",
+            "10.8",
+            true,
+            [new("192.0.2.10", "fixture.example", "tcp", 443, "reported", null, null)],
+            [
+                new(
+                    "nessus_xml",
+                    "12345",
+                    "Fixture Nessus finding",
+                    "high",
+                    "192.0.2.10",
+                    443,
+                    "tcp",
+                    ImportedClaimStatus.ImportedMatch,
+                    ImportedEvidenceStrength.Unresolved,
+                    ["CVE-2026-12345"],
+                    [],
+                    new string('d', 64),
+                    "12345",
+                    null),
+            ],
+            []);
+
+        AssertSerializedShape(
+            JsonOutput.Serialize(document),
+            "portcve.import.v1.schema.json");
+    }
+
+    [Fact]
     public void PrivateAndRedactedRemoteReportShapesMatchPublishedSchema()
     {
         var report = RemoteReportFixture();
@@ -217,6 +254,94 @@ public sealed class SchemaContractTests
         AssertSerializedShape(
             JsonOutput.Serialize(RemoteAuditRedactor.Redact(report)),
             "portcve.remote.v1.schema.json");
+    }
+
+    [Fact]
+    public void PrivateAndRedactedExposureVerificationShapesMatchPublishedSchema()
+    {
+        var finding = new VerificationFindingGroup(
+            "cve:CVE-2026-12345",
+            "Fixture finding",
+            "high",
+            ["CVE-2026-12345"],
+            FindingCorrelation.OwnerCorroborated,
+            "not_assessed",
+            [
+                new(
+                    "nuclei_jsonl",
+                    "fixture-template",
+                    "Fixture finding",
+                    "high",
+                    ImportedClaimStatus.ImportedMatch,
+                    ImportedEvidenceStrength.Unresolved,
+                    ["CVE-2026-12345"],
+                    new string('b', 64),
+                    "fixture-matcher"),
+            ]);
+        var report = new ExposureVerificationReport(
+            ExposureVerificationReport.CurrentSchemaVersion,
+            "test",
+            VerificationPrivacyMode.Private,
+            DateTimeOffset.UnixEpoch,
+            new(
+                "192.0.2.10",
+                true,
+                "internet",
+                [new("tcp", 443, 8443)]),
+            [
+                new(
+                    VerificationInputKind.NmapXml,
+                    "scan.xml",
+                    123,
+                    new string('a', 64),
+                    "7.98",
+                    true,
+                    null),
+                new(
+                    VerificationInputKind.LiveWindows,
+                    null,
+                    null,
+                    null,
+                    "test",
+                    true,
+                    DateTimeOffset.UnixEpoch),
+            ],
+            [
+                new(
+                    "tcp",
+                    443,
+                    8443,
+                    ExposureCorrelation.CorrelatedOpen,
+                    [new("nmap_xml", "192.0.2.10", "fixture.example", "open", "syn-ack", null)],
+                    [
+                        new(
+                            IpFamily.Ipv4,
+                            BindScope.Wildcard,
+                            "0.0.0.0",
+                            8443,
+                            $"sha256:{new string('c', 64)}",
+                            OwnerIdentityStrength.Sha256,
+                            "fixture.exe",
+                            [],
+                            [],
+                            FirewallVerdict.Allow,
+                            Confidence.High,
+                            []),
+                    ],
+                    [finding],
+                    ["Fixture limitation."]),
+            ],
+            [],
+            new(1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 1, true),
+            [],
+            "Fixture claim boundary.");
+
+        AssertSerializedShape(
+            JsonOutput.Serialize(report),
+            "portcve.verify.v1.schema.json");
+        AssertSerializedShape(
+            JsonOutput.Serialize(ExposureVerificationRedactor.Redact(report)),
+            "portcve.verify.v1.schema.json");
     }
 
     private static void AssertSerializedShape(string json, string schemaFile)

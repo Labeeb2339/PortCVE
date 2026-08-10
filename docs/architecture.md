@@ -88,6 +88,24 @@ When a lockfile includes complete container evidence and every correlated public
 
 The integrated path was validated on 2026-08-09 against Docker Desktop client/server 28.3.2 on Windows NT 10.0.26200.0 with the `desktop-linux` WSL2 context. An official `alpine:3.22` fixture published one loopback TCP tuple and one wildcard UDP tuple; both echoed real payloads, an independent Windows CIM check observed the exact tuples, and the then-named BindWitness build correlated both while retaining `com.docker.backend.exe` as the Windows owner. A container-image lock passed unchanged, then reported `owner_changed` with exit code 1 when PowerShell replaced the same TCP endpoint. This is validation of the local collection/correlation/gating path on that environment, not a claim about external reachability, guest-process ownership, Linux hosts, or every Docker version.
 
+## Scanner-to-owner verification
+
+`verify` is an offline join over three independently preserved evidence sources:
+
+1. a required normalized Nmap host and endpoint set;
+2. optional normalized Nuclei and Nessus finding records; and
+3. a new live Windows snapshot with binary hashing and, by default, static firewall collection.
+
+The operator selects the imported host and labels the scanner vantage. PortCVE does not resolve the imported target or make a remote connection during verification. Target selection must identify one imported address; an ambiguous hostname is rejected. External protocol/port maps to the same local endpoint unless an explicit same-transport `--port-map` records forwarding knowledge.
+
+The join key is selected target plus external protocol/port, followed by the explicit external-to-local mapping. Every matching local listener is retained. Supplemental hostname aliases must identify only the selected Nmap address, and a finding without a defensible transport protocol remains target-level. Imported observations, owner identity strength, bind scope, container identity, host-policy confidence, and limitations remain separate fields. Exact input and finding-record hashes remain available in private output; default output uses a schema-valid zero digest to prevent offline target enumeration. Correlation states describe agreement or disagreement; they never replace the original source state.
+
+Strict verification scopes owner and bind completeness to listeners matching the selected imported endpoints, while still requiring a complete socket table and complete requested firewall collection. This prevents unrelated protected-process metadata gaps from making a strong selected owner unusable without allowing a weak selected owner to pass. Selected endpoint groups, findings, and finding-to-advisory memberships are independently capped before grouping and serialization.
+
+CVE-bearing findings are grouped per endpoint and advisory while preserving source observations. Non-CVE findings are grouped by source and finding ID. Portless findings stay target-level. Neither grouping nor listener attribution changes `exploitability: not_assessed`.
+
+The versioned output is `schema/portcve.verify.v1.schema.json`. The default redactor aliases the selected target and vantage, normalizes local addresses, removes hostnames and detailed diagnostics, and masks artifact/container hashes while preserving operational port, owner-name, evidence-strength, and correlation facts.
+
 ## Listener identity
 
 The normalized bind key is:

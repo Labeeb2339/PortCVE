@@ -4,6 +4,8 @@ All notable changes will be documented here. The project follows semantic versio
 
 ## Unreleased
 
+- Added `verify` to correlate imported Nmap reachability and Nuclei/Nessus findings with live Windows listener ownership, Docker, bind scope, and static host-policy evidence, including explicit NAT port mappings and a versioned privacy-reduced report.
+- Added bounded streaming Nessus report import with CVE/severity normalization while discarding raw plugin output, credentials, and unrelated host properties.
 - Renamed the project, executable, namespaces, schemas, scripts, and release artifacts from BindWitness (`bindwitness`) to PortCVE (`portcve`); no behavior changed as part of the rename.
 - Added `scan` for offline known-advisory matching against immutable local Docker image IDs and explicit local SBOMs, with a versioned JSON schema, redaction, database-freshness evidence, and `--strict`/`--fail-on` exit gates.
 - Added explicit `db status` and `db update` commands for an externally installed, locally validated Trivy executable; scans remain offline and never install or update the engine or advisory database implicitly.

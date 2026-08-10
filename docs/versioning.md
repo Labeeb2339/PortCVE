@@ -10,6 +10,7 @@ Published schema documents use location-independent URNs:
 - `urn:portcve:schema:database:v1`
 - `urn:portcve:schema:remote:v1`
 - `urn:portcve:schema:import:v1`
+- `urn:portcve:schema:verify:v1`
 
 These identifiers do not imply that a `portcve.dev` website or schema host exists.
 
@@ -26,6 +27,8 @@ After `1.0`:
 Consumers must inspect `schema_version` before parsing. Snapshot consumers may handle unknown optional fields defensively, but schema validation for a declared version remains authoritative. Lockfile readers reject unknown schema versions and unsupported selector or enum values rather than guessing. Never parse the human-readable table as an API.
 
 Trivy database status/update JSON uses `schema/portcve.database.v1.schema.json`. V1 includes `tool_version`, the explicit `operation` and `network_requested` pair, readiness state, database schema/freshness evidence, stable result code, and a `privacy_mode`. Default `reduced` documents alias local executable/cache paths; `private` documents are emitted only when the operator supplies `--include-private`. Changing those aliases back to exact paths by default would be a privacy-breaking schema-contract change.
+
+Exposure verification JSON uses `schema/portcve.verify.v1.schema.json` and requires `privacy_mode`. `reduced` output replaces target-bearing input and finding-record hashes with a 64-character zero digest; `private` output retains the exact hashes. Consumers must use `privacy_mode`, not infer it from the digest value.
 
 Lockfiles deliberately omit volatile and private values. V1 includes `includes_udp`, the port/protocol `selector`, ownership/bind/policy/container `evidence` completeness, `owner_identity_strength`, and `host_policy_confidence`. Container-correlated endpoints can use a deterministic hash of the sorted distinct image-ID set with strength `container_image`; raw container IDs, names, and image references are omitted. Two captures of the same normalized endpoint set, selector, UDP choice, evidence class, normalized owner identity, and tool version produce the same lockfile content.
 

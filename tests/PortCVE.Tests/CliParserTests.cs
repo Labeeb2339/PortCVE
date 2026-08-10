@@ -225,6 +225,8 @@ public sealed class CliParserTests
     [InlineData("nmap-xml", RemoteImportFormat.NmapXml)]
     [InlineData("nuclei", RemoteImportFormat.NucleiJsonl)]
     [InlineData("nuclei-jsonl", RemoteImportFormat.NucleiJsonl)]
+    [InlineData("nessus", RemoteImportFormat.NessusXml)]
+    [InlineData("nessus-xml", RemoteImportFormat.NessusXml)]
     public void Parse_ImportFormatPathAndOutputFlags_AreWired(
         string format,
         RemoteImportFormat expectedFormat)
@@ -250,6 +252,54 @@ public sealed class CliParserTests
     [InlineData("import", "nuclei", "results.jsonl", "--active")]
     [InlineData("import", "nuclei", "results.jsonl", "--fail-on", "high")]
     public void Parse_InvalidImportCombinations_AreRejected(params string[] arguments)
+    {
+        Assert.Throws<CliUsageException>(() => CliParser.Parse(arguments));
+    }
+
+    [Fact]
+    public void Parse_VerifyEvidenceOptions_AreWiredAndFirewallDefaultsOn()
+    {
+        var result = CliParser.Parse(
+        [
+            "verify", "edge.xml", "--target", "203.0.113.10", "--nuclei", "findings.jsonl",
+            "--nessus", "assessment.nessus", "--vantage", "internet", "--port-map", "tcp/443=tcp/8443",
+            "--strict", "--json", "--include-private", "--output", "verified.json", "--force",
+        ]);
+
+        Assert.Equal(CommandKind.Verify, result.Command);
+        Assert.Equal("edge.xml", result.InputPath);
+        Assert.Equal("203.0.113.10", result.VerifyTarget);
+        Assert.Equal("findings.jsonl", result.NucleiPath);
+        Assert.Equal("assessment.nessus", result.NessusPath);
+        Assert.Equal("internet", result.Vantage);
+        Assert.Equal("tcp/443=tcp/8443", result.PortMappings);
+        Assert.True(result.IncludeFirewall);
+        Assert.True(result.Strict);
+        Assert.True(result.Json);
+        Assert.True(result.IncludePrivate);
+        Assert.True(result.Force);
+        Assert.Equal("verified.json", result.OutputPath);
+    }
+
+    [Fact]
+    public void Parse_VerifyCanExplicitlySkipFirewall()
+    {
+        var result = CliParser.Parse(
+            ["verify", "edge.xml", "--target", "203.0.113.10", "--no-firewall"]);
+
+        Assert.False(result.IncludeFirewall);
+    }
+
+    [Theory]
+    [InlineData("verify")]
+    [InlineData("verify", "edge.xml")]
+    [InlineData("verify", "edge.xml", "--target", "192.0.2.1", "extra")]
+    [InlineData("verify", "edge.xml", "--target", "192.0.2.1", "--authorized")]
+    [InlineData("verify", "edge.xml", "--target", "192.0.2.1", "--active")]
+    [InlineData("verify", "edge.xml", "--target", "192.0.2.1", "--fail-on", "high")]
+    [InlineData("list", "--nuclei", "findings.jsonl")]
+    [InlineData("import", "nmap", "edge.xml", "--target", "192.0.2.1")]
+    public void Parse_InvalidVerifyCombinations_AreRejected(params string[] arguments)
     {
         Assert.Throws<CliUsageException>(() => CliParser.Parse(arguments));
     }

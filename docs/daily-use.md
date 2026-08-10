@@ -137,16 +137,27 @@ portcve scan-host 10.20.30.40 --ports 22,443 `
 
 For larger approved scopes, split work into bounded runs. PortCVE intentionally has host, endpoint, concurrency, rate, timeout, evidence, and advisory-identity caps instead of an unlimited mode.
 
-## Reuse Nmap and Nuclei evidence
+## Reuse scanner evidence
 
 PortCVE can normalize existing local outputs without launching those tools or contacting their targets:
 
 ```powershell
 portcve import nmap .\scan.xml -o .\scan.portcve.json --strict
 portcve import nuclei .\findings.jsonl -o .\findings.portcve.json --strict
+portcve import nessus .\assessment.nessus -o .\assessment.portcve.json --strict
 ```
 
-The importers are bounded and discard sensitive raw request, response, script-output, and extracted-value fields. Normalized output still contains assessment metadata and must be reviewed before publication.
+The importers are bounded and discard sensitive raw request, response, script-output, plugin-output, credential, and extracted-value fields. Normalized output still contains assessment metadata and must be reviewed before publication.
+
+On the Windows host represented by an imported Nmap target, correlate outside-in evidence with the current listener owner and host policy:
+
+```powershell
+portcve verify .\scan.xml --target 203.0.113.10 `
+    --nuclei .\findings.jsonl --nessus .\assessment.nessus `
+    --vantage internet --strict -o .\verification.json
+```
+
+If a public or forwarded port differs from the local bind, add an explicit mapping such as `--port-map tcp/443=tcp/8443`. The target association and vantage are operator assertions. Verification performs no remote traffic and does not turn an imported finding into proof of reachability, applicability, or exploitability.
 
 ## Exit codes for automation
 

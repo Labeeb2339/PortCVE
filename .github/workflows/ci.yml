@@ -33,6 +33,10 @@ jobs:
         shell: pwsh
         run: ./scripts/tests/Test-Rfc3161Timestamp.ps1
 
+      - name: Verify scanner-to-owner harness safety
+        shell: powershell
+        run: ./scripts/tests/Test-ExposureVerificationHarness.ps1
+
       - name: Restore
         run: dotnet restore PortCVE.sln --locked-mode
 
@@ -58,6 +62,10 @@ jobs:
       - name: Verify authorized remote loopback workflow
         shell: powershell
         run: ./scripts/Test-RemoteHostIntegration.ps1 -SkipBuild -PortCVEPath ./artifacts/win-x64/portcve.exe
+
+      - name: Verify scanner-to-owner workflow
+        shell: powershell
+        run: ./scripts/Test-ExposureVerificationIntegration.ps1 -SkipBuild -PortCVEPath ./artifacts/win-x64/portcve.exe
 
       - name: Verify daily-workflow performance budgets
         shell: powershell

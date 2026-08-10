@@ -46,6 +46,11 @@ public static class CliParser
         TimeSpan? readTimeout = null;
         int? maximumHosts = null;
         RemoteImportFormat? importFormat = null;
+        string? nucleiPath = null;
+        string? nessusPath = null;
+        string? verifyTarget = null;
+        string? vantage = null;
+        string? portMappings = null;
         TimeSpan? interval = null;
         int? iterations = null;
         var index = 0;
@@ -85,6 +90,7 @@ public static class CliParser
                     "scan" => CommandKind.Scan,
                     "scan-host" or "host" => CommandKind.ScanHost,
                     "import" => CommandKind.Import,
+                    "verify" => CommandKind.Verify,
                     "lock" => CommandKind.Lock,
                     "snapshot" => CommandKind.Snapshot,
                     "diff" => CommandKind.Diff,
@@ -195,6 +201,21 @@ public static class CliParser
                 case "--max-hosts":
                     maximumHosts = ParseBoundedInt(RequireValue(arguments, ref index, argument), argument, 1, 65536);
                     break;
+                case "--nuclei":
+                    nucleiPath = RequireValue(arguments, ref index, argument);
+                    break;
+                case "--nessus":
+                    nessusPath = RequireValue(arguments, ref index, argument);
+                    break;
+                case "--target":
+                    verifyTarget = RequireValue(arguments, ref index, argument);
+                    break;
+                case "--vantage":
+                    vantage = RequireValue(arguments, ref index, argument);
+                    break;
+                case "--port-map":
+                    portMappings = RequireValue(arguments, ref index, argument);
+                    break;
                 case "-p" or "--port":
                     port = ParsePort(RequireValue(arguments, ref index, argument));
                     break;
@@ -266,17 +287,29 @@ public static class CliParser
         {
             if (positionals.Count < 2)
             {
-                throw new CliUsageException("import requires a format and local input path: import <nmap|nuclei> <path>.");
+                throw new CliUsageException("import requires a format and local input path: import <nmap|nuclei|nessus> <path>.");
             }
 
             importFormat = positionals[0].ToLowerInvariant() switch
             {
                 "nmap" or "nmap-xml" => RemoteImportFormat.NmapXml,
                 "nuclei" or "nuclei-jsonl" => RemoteImportFormat.NucleiJsonl,
-                _ => throw new CliUsageException("import format must be nmap or nuclei."),
+                "nessus" or "nessus-xml" => RemoteImportFormat.NessusXml,
+                _ => throw new CliUsageException("import format must be nmap, nuclei, or nessus."),
             };
             input = positionals[1];
             positionals.RemoveRange(0, 2);
+        }
+
+        if (command == CommandKind.Verify)
+        {
+            if (positionals.Count == 0)
+            {
+                throw new CliUsageException("verify requires an Nmap XML path.");
+            }
+
+            input = positionals[0];
+            positionals.RemoveAt(0);
         }
 
         if (command is CommandKind.Diff or CommandKind.Check)
@@ -367,6 +400,30 @@ public static class CliParser
                     "import accepts only its format and local input path, --json, --output, --force, and --strict.");
             }
         }
+        else if (command == CommandKind.Verify)
+        {
+            if (string.IsNullOrWhiteSpace(verifyTarget))
+            {
+                throw new CliUsageException("verify requires --target <imported-host-or-IP>.");
+            }
+
+            if (port is not null || protocol is not null || process is not null || scope is not null
+                || evidence || includeUdp || resolveAccounts || interval is not null || iterations is not null
+                || allowIncomplete || all || sbomPath is not null || failOn is not null || remotePorts is not null
+                || active || authorized || onlineAdvisories || concurrency is not null || rate is not null
+                || connectTimeout is not null || readTimeout is not null || maximumHosts is not null
+                || importFormat is not null || allowWeakOwner)
+            {
+                throw new CliUsageException(
+                    "verify accepts its Nmap path, --target, --nuclei, --nessus, --vantage, --port-map, "
+                    + "--firewall, --no-firewall, --strict, --json, --output, --force, and --include-private.");
+            }
+
+            if (!firewallExplicitlyDisabled)
+            {
+                firewall = true;
+            }
+        }
         else if (command is CommandKind.DbStatus or CommandKind.DbUpdate)
         {
             if (port is not null || protocol is not null || process is not null || scope is not null
@@ -398,6 +455,14 @@ public static class CliParser
             throw new CliUsageException(
                 "--ports, --active, --authorized, --online-advisories, --concurrency, --rate, --connect-timeout, "
                 + "--read-timeout, and --max-hosts are available only with scan-host.");
+        }
+
+        if (command != CommandKind.Verify
+            && (nucleiPath is not null || nessusPath is not null || verifyTarget is not null
+                || vantage is not null || portMappings is not null))
+        {
+            throw new CliUsageException(
+                "--nuclei, --nessus, --target, --vantage, and --port-map are available only with verify.");
         }
 
         if (command != CommandKind.Lock && allowWeakOwner)
@@ -458,7 +523,12 @@ public static class CliParser
             readTimeout,
             maximumHosts,
             importFormat,
-            allowWeakOwner);
+            allowWeakOwner,
+            nucleiPath,
+            nessusPath,
+            verifyTarget,
+            vantage,
+            portMappings);
     }
 
     private static string RequireValue(IReadOnlyList<string> arguments, ref int index, string option)

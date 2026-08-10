@@ -71,6 +71,15 @@ internal static class LocalPathPolicy
             "Windows PowerShell module");
     }
 
+    public static LocalPathValidation ValidateExistingProcessImage(string path)
+    {
+        return ValidateLocalFile(
+            path,
+            requireExists: true,
+            "process_image",
+            "Process image");
+    }
+
     public static LocalPathValidation ValidateExistingTrivyDatabaseFile(string path)
     {
         return ValidateLocalFile(path, requireExists: true, "trivy_database", "Trivy database");

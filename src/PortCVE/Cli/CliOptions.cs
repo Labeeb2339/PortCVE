@@ -11,6 +11,7 @@ public enum CommandKind
     Scan,
     ScanHost,
     Import,
+    Verify,
     DbStatus,
     DbUpdate,
     Lock,
@@ -56,7 +57,12 @@ public sealed record CliOptions(
     TimeSpan? ReadTimeout = null,
     int? MaximumHosts = null,
     RemoteImportFormat? ImportFormat = null,
-    bool AllowWeakOwner = false);
+    bool AllowWeakOwner = false,
+    string? NucleiPath = null,
+    string? NessusPath = null,
+    string? VerifyTarget = null,
+    string? Vantage = null,
+    string? PortMappings = null);
 
 public sealed class CliUsageException(string message) : Exception(message);
 

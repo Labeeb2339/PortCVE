@@ -3,14 +3,17 @@
 [![CI](https://github.com/Labeeb2339/PortCVE/actions/workflows/ci.yml/badge.svg)](https://github.com/Labeeb2339/PortCVE/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/Labeeb2339/PortCVE/actions/workflows/codeql.yml/badge.svg)](https://github.com/Labeeb2339/PortCVE/actions/workflows/codeql.yml)
 
-PortCVE is a Windows CLI for answering four practical questions:
+PortCVE is a Windows exposure-verification CLI. It joins external scanner evidence to the local listener, owner, container, and host policy behind a port.
+
+It answers five practical questions:
 
 1. What is listening?
 2. Which process, service, or container owns it?
 3. Has the local attack surface changed?
-4. Do identified packages or authorized remote service fingerprints match known CVEs?
+4. Which local owner best explains an outside scanner observation?
+5. Do identified packages or authorized remote service fingerprints match known CVEs?
 
-The current version is `0.2.0-alpha.1`. Windows x64 is the only supported target. There is no signed PortCVE release yet, so current users must build from source.
+The current version is `0.3.0-alpha.1`. Windows x64 is the only supported target. There is no signed PortCVE release yet, so current users must build from source.
 
 ## Features
 
@@ -22,6 +25,8 @@ The current version is `0.2.0-alpha.1`. Windows x64 is the only supported target
 - Fingerprints TCP services on hosts or IPv4 CIDRs you are authorized to assess.
 - Maps a small reviewed set of strong service banners to NVD CVE candidates.
 - Imports existing Nmap XML and Nuclei JSONL without launching either scanner.
+- Imports Nessus reports without retaining raw plugin output or credentials.
+- Correlates imported outside-in observations with live Windows listeners, owners, containers, and host-policy evidence.
 - Emits text, versioned JSON, JSONL, and stable exit codes for automation.
 
 PortCVE is not an exploit framework. It does not brute-force credentials, send exploit payloads, close ports, edit firewall rules, or claim that a CVE match is exploitable.
@@ -120,9 +125,26 @@ portcve scan-host 10.20.30.40 --ports 22,443 `
 ```powershell
 portcve import nmap .\scan.xml -o .\scan.portcve.json --strict
 portcve import nuclei .\findings.jsonl -o .\findings.portcve.json --strict
+portcve import nessus .\assessment.nessus -o .\assessment.portcve.json --strict
 ```
 
 The importers are streaming and size-limited. They remove raw response and extracted-value fields, but the normalized report can still contain sensitive assessment metadata.
+
+### Verify a scanner observation on the Windows host
+
+Run `verify` on the Windows machine that the imported Nmap host represents:
+
+```powershell
+portcve verify .\edge-nmap.xml `
+    --target 203.0.113.10 `
+    --nuclei .\findings.jsonl `
+    --nessus .\assessment.nessus `
+    --vantage internet `
+    --port-map tcp/443=tcp/8443 `
+    --strict -o .\verification.json
+```
+
+The target association and vantage label are operator assertions. PortCVE joins external port observations to current local binds and preserves mismatches instead of hiding them. A correlation can support owner attribution; it does not prove that the old scan is still reachable or that a reported vulnerability is applicable or exploitable. `verify` performs no remote traffic.
 
 ## Output and privacy
 
@@ -145,6 +167,7 @@ Versioned schemas live in [`schema/`](schema/):
 - [local vulnerability report](schema/portcve.vulnerability.v1.schema.json)
 - [remote assessment](schema/portcve.remote.v1.schema.json)
 - [external evidence import](schema/portcve.import.v1.schema.json)
+- [exposure verification](schema/portcve.verify.v1.schema.json)
 
 ## Install and release status
 
@@ -160,15 +183,16 @@ PortCVE intentionally does not support `irm ... | iex`. Piped script text starts
 - Windows x64 only; no Linux host or WSL guest-process attribution yet.
 - Native Windows software is not assigned a CPE from a filename or port guess.
 - Remote CVE results are candidates based on observed banner data, not proof of applicability or exploitability.
+- Exposure verification depends on an operator-supplied host association and time-separated scanner evidence.
 - Windows Firewall analysis is static configuration review, not live packet-path testing.
 - Dynamic collection can miss short-lived endpoints or lose metadata during process churn.
 The full security model is in [docs/threat-model.md](docs/threat-model.md), and implementation details are in [docs/architecture.md](docs/architecture.md).
 
 ## Validation
 
-CI runs the test suite on Windows Server 2022 and 2025, builds the self-contained executable, checks formatting, exercises the installer and RFC 3161 verification harnesses, runs an authorized loopback scan, checks performance budgets, and performs CodeQL analysis.
+CI runs the test suite on Windows Server 2022 and 2025, builds the self-contained executable, checks formatting, exercises the installer and RFC 3161 verification harnesses, runs the authorized loopback and scanner-to-owner workflows, checks performance budgets, and performs CodeQL analysis.
 
-Live Docker, Trivy, corruption-handling, privacy, remote-loopback, and performance results are recorded in [docs/validation.md](docs/validation.md) and [docs/remote-live-validation.md](docs/remote-live-validation.md).
+Live Docker, Trivy, corruption-handling, privacy, remote-loopback, scanner-to-owner verification, and performance results are recorded in [docs/validation.md](docs/validation.md), [docs/remote-live-validation.md](docs/remote-live-validation.md), and [docs/verify-live-validation.md](docs/verify-live-validation.md).
 
 ## Development
 

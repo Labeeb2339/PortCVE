@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:portcve:schema:import:v1",
   "title": "PortCVE external evidence import v1",
-  "description": "Bounded normalization of user-supplied Nmap XML or Nuclei JSONL. Imported matches remain external observations and do not establish exploitability.",
+  "description": "Bounded normalization of user-supplied Nmap XML, Nuclei JSONL, or Nessus XML. Imported matches remain external observations and do not establish exploitability.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -21,7 +21,7 @@
     "tool_version": { "type": "string", "minLength": 1 },
     "generated_at": { "type": "string", "format": "date-time" },
     "input": { "$ref": "#/$defs/input" },
-    "source": { "enum": ["nmap_xml", "nuclei_jsonl"] },
+    "source": { "enum": ["nmap_xml", "nuclei_jsonl", "nessus_xml"] },
     "source_version": { "type": "string", "minLength": 1 },
     "is_complete": { "type": "boolean" },
     "endpoints": {

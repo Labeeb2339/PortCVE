@@ -13,9 +13,9 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <RuntimeFrameworkVersion>10.0.10</RuntimeFrameworkVersion>
     <PublishTrimmed>false</PublishTrimmed>
-    <Version>0.2.0-alpha.1</Version>
+    <Version>0.3.0-alpha.1</Version>
     <Title>PortCVE</Title>
-    <Description>Audit local Windows listeners and authorized remote TCP services with evidence-backed CVE correlation.</Description>
+    <Description>Correlate Windows listener ownership, external scanner evidence, and evidence-backed CVE candidates.</Description>
     <Authors>Labeeb</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>

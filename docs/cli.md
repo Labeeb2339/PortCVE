@@ -20,6 +20,8 @@ portcve db update                    Explicitly download and validate the Trivy 
 portcve scan-host <target> --authorized  Scan an authorized host or IPv4 CIDR
 portcve import nmap <scan.xml>       Normalize an existing Nmap XML file
 portcve import nuclei <results.jsonl> Normalize existing Nuclei JSONL findings
+portcve import nessus <report.nessus> Normalize an existing Nessus report
+portcve verify <scan.xml> --target <host> Correlate scanner evidence with this Windows host
 portcve watch                        Poll and report endpoint changes
 portcve doctor                       Report collector coverage
 portcve help                         Show the concise built-in reference
@@ -95,6 +97,40 @@ Remote findings use `candidate`, `conditional_candidate`, or `inconclusive`; all
 
 NVD notice: This product uses data from the NVD API but is not endorsed or certified by the NVD.
 
+## Scanner-to-owner verification
+
+`verify` performs no remote traffic. It imports one Nmap XML report, selects exactly one imported host, and joins those outside observations to a fresh local Windows collection. Optional Nuclei JSONL and Nessus reports add finding provenance.
+
+```powershell
+portcve verify .\edge-nmap.xml `
+  --target 203.0.113.10 `
+  --nuclei .\findings.jsonl `
+  --nessus .\assessment.nessus `
+  --vantage internet `
+  --port-map tcp/443=tcp/8443 `
+  --strict `
+  -o .\verification.json
+```
+
+`--target` is required and asserts that the chosen imported host represents the Windows machine running PortCVE. Prefer an exact imported IP address. When an IP is selected, Nmap hostname aliases are not used to attach supplemental findings; the Nmap import model does not preserve hostname-only hosts that have no explicit port rows. Selection by hostname is accepted only when its retained endpoint rows map to one imported address, and any attached finding remains `owner_ambiguous` rather than exact owner corroboration. Ambiguous or missing targets return exit code `2`. `--vantage` is an operator label and defaults to `imported_scan`; PortCVE does not independently verify where the scanner ran.
+
+External and local ports map identically by default. `--port-map tcp/443=tcp/8443,udp/53=udp/5353` records explicit NAT or forwarding knowledge. Cross-protocol, duplicate, malformed, and out-of-range mappings are rejected.
+
+Endpoint results remain deliberately narrow:
+
+- `correlated_open`: Nmap reported `open` and a current non-loopback listener matches the mapped local endpoint.
+- `outside_only`: Nmap reported `open`, but no matching live listener was observed.
+- `loopback_mismatch`: the outside-open endpoint maps only to a loopback bind.
+- `outside_negative_local_present`: a live listener exists while the imported state was closed or non-open.
+- `consistent_absent`: an explicit imported closed state has no live match.
+- `inconclusive`: input, collector, state, or correlation evidence is incomplete or conflicting.
+
+All matching listeners are retained. PortCVE does not select one owner when wildcard, interface, IPv4, IPv6, reused UDP, or multiple-process binds coexist. Nuclei and Nessus findings are grouped by endpoint and CVE while retaining scanner provenance. Exact input and source-record hashes remain available only with `--include-private`; default JSON sets `privacy_mode: reduced` and replaces them with a schema-valid zero digest because target-bearing evidence hashes can otherwise be enumerated. Private JSON sets `privacy_mode: private`. Portless findings, findings for a port absent from Nmap, and findings without a defensible transport protocol remain target-level rather than being forced onto a socket. Finding correlation says whether a local owner was corroborated; `exploitability` always remains `not_assessed`.
+
+Firewall evidence is collected by default and can be disabled with `--no-firewall`. `--strict` requires a complete socket table plus strong owner identity, known bind scope, and sufficient requested firewall evidence for every selected matching listener. Unrelated protected-process owner gaps remain visible diagnostics but do not invalidate strong selected evidence. Verification is capped at 65,536 selected Nmap endpoint groups, 25,000 selected findings, and 25,000 finding-to-advisory memberships; larger engagements must be split. Output follows `schema/portcve.verify.v1.schema.json`; default JSON aliases the selected target, vantage, local addresses, hashes, container identities, diagnostic details, and matching target/address text embedded in retained scanner labels. Use `--include-private` only for a controlled report.
+
+Imported scan time and live collection time are generally different. A matching listener supports plausible local owner attribution, but does not prove the imported packet reached that socket, that the path remains reachable, or that a finding applies to the loaded code.
+
 ## External evidence imports
 
 `import` normalizes an existing local scanner result without launching that scanner, fetching templates, following links, resolving targets, or sending network traffic:
@@ -102,9 +138,12 @@ NVD notice: This product uses data from the NVD API but is not endorsed or certi
 ```powershell
 portcve import nmap .\scan.xml -o .\scan.portcve.json
 portcve import nuclei .\findings.jsonl -o .\findings.portcve.json
+portcve import nessus .\assessment.nessus -o .\assessment.portcve.json
 ```
 
-The input must be an existing regular file on a local drive. UNC paths, mapped network drives, device paths, symbolic links, junctions, mount points, and cloud placeholders are rejected before the file is opened. Nmap XML is capped at 64 MiB. Nuclei JSONL is capped at 256 MiB, 100,000 nonblank records, 200,000 physical lines, and 1 MiB of UTF-8 bytes per record. Both importers enforce a 16 MiB aggregate retained-character budget before JSON serialization. The report records only the input leaf name, byte length, and SHA-256—not its full local path.
+The input must be an existing regular file on a local drive. UNC paths, mapped network drives, device paths, symbolic links, junctions, mount points, and cloud placeholders are rejected before the file is opened. Nmap XML is capped at 64 MiB. Nuclei JSONL and Nessus XML are capped at 256 MiB and have format-specific host, item, line, depth, and retained-text limits. Every importer enforces a bounded retained-character budget before JSON serialization. The report records only the input leaf name, byte length, and SHA-256—not its full local path.
+
+Nessus import accepts canonical `NessusClientData_v2/Report/ReportHost/ReportItem` structure, normalizes plugin ID, title, severity, target, endpoint, service name, and CVE identifiers, and discards raw `plugin_output`, credentials, and unrelated host properties. DTDs and external entities are prohibited. Dropped or malformed evidence makes the normalized result incomplete.
 
 Path validation is repeated close to file I/O, but it is path-based. It does not claim to defeat a malicious same-user process that can rename an ancestor and replace it with a junction in the validation/open race window. Use assessment input/output directories that are not writable by untrusted local users.
 

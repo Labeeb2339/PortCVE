@@ -9,6 +9,7 @@ using PortCVE.Remote.Advisories;
 using PortCVE.Remote.Imports;
 using PortCVE.Snapshots;
 using PortCVE.Vulnerabilities;
+using PortCVE.Verification;
 
 namespace PortCVE.Cli;
 
@@ -145,6 +146,7 @@ public sealed class CliApplication
             CommandKind.Scan => await RunScanAsync(options, output, error, cancellationToken),
             CommandKind.ScanHost => await RunScanHostAsync(options, output, error, cancellationToken),
             CommandKind.Import => await RunImportAsync(options, output, error, cancellationToken),
+            CommandKind.Verify => await RunVerifyAsync(options, output, error, cancellationToken),
             CommandKind.DbStatus or CommandKind.DbUpdate =>
                 await RunTrivyDatabaseAsync(options, output, error, cancellationToken),
             CommandKind.Lock => await RunLockAsync(options, output, error, cancellationToken),
@@ -553,6 +555,210 @@ public sealed class CliApplication
         }
 
         return ExitCodes.Success;
+    }
+
+    private async Task<int> RunVerifyAsync(
+        CliOptions options,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        var vantage = options.Vantage is null
+            ? "imported_scan"
+            : ImportText.SanitizeIdentifier(options.Vantage, 64);
+        if (vantage is null)
+        {
+            error.WriteLine("error: --vantage must be a short label using letters, digits, '.', '_', ':', or '-'.");
+            return ExitCodes.UsageOrSchema;
+        }
+
+        IReadOnlyDictionary<VerificationEndpointKey, VerificationEndpointKey> portMappings;
+        try
+        {
+            portMappings = PortMappingParser.Parse(options.PortMappings);
+        }
+        catch (VerificationInputException exception)
+        {
+            error.WriteLine($"error: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+
+        string? validatedOutputPath = null;
+        if (options.OutputPath is not null)
+        {
+            var validation = LocalPathPolicy.ValidateOptionalImportOutputFile(options.OutputPath);
+            if (!validation.IsValid)
+            {
+                error.WriteLine($"error: {validation.Code}: {validation.Message}");
+                return ExitCodes.UsageOrSchema;
+            }
+
+            validatedOutputPath = validation.FullPath;
+            if (File.Exists(validatedOutputPath) && !options.Force)
+            {
+                error.WriteLine("error: the verification report already exists; pass --force to replace it.");
+                return ExitCodes.UsageOrSchema;
+            }
+        }
+
+        PentestImportDocument nmap;
+        var supplemental = new List<PentestImportDocument>();
+        try
+        {
+            var importService = new PentestImportService();
+            nmap = importService.Import(
+                RemoteImportFormat.NmapXml,
+                options.InputPath!,
+                Version,
+                options.Strict,
+                cancellationToken);
+            if (options.NucleiPath is not null)
+            {
+                supplemental.Add(importService.Import(
+                    RemoteImportFormat.NucleiJsonl,
+                    options.NucleiPath,
+                    Version,
+                    options.Strict,
+                    cancellationToken));
+            }
+
+            if (options.NessusPath is not null)
+            {
+                supplemental.Add(importService.Import(
+                    RemoteImportFormat.NessusXml,
+                    options.NessusPath,
+                    Version,
+                    options.Strict,
+                    cancellationToken));
+            }
+
+            _ = ExposureVerificationService.SelectTarget(nmap, options.VerifyTarget!);
+            if (validatedOutputPath is not null
+                && new[] { options.InputPath, options.NucleiPath, options.NessusPath }
+                    .Where(static path => path is not null)
+                    .Select(static path => Path.GetFullPath(path!))
+                    .Any(path => string.Equals(path, validatedOutputPath, StringComparison.OrdinalIgnoreCase)))
+            {
+                error.WriteLine("error: verification output must not replace a source evidence file.");
+                return ExitCodes.UsageOrSchema;
+            }
+        }
+        catch (VerificationInputException exception)
+        {
+            error.WriteLine($"error: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+        catch (ImportPathException exception)
+        {
+            error.WriteLine($"error: {exception.Code}: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+        catch (InvalidDataException exception)
+        {
+            error.WriteLine($"error: verification input is invalid: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+        catch (System.Xml.XmlException exception)
+        {
+            error.WriteLine($"error: verification input is invalid XML: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+        catch (IOException exception)
+        {
+            error.WriteLine($"error: could not read verification evidence: {exception.Message}");
+            return ExitCodes.RuntimeFailure;
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            error.WriteLine($"error: could not read verification evidence: {exception.Message}");
+            return ExitCodes.RuntimeFailure;
+        }
+
+        var snapshot = await snapshotBuilder.CollectAsync(
+            new(
+                IncludeFirewall: options.IncludeFirewall,
+                IncludeProfiles: true,
+                HashBinaries: true),
+            cancellationToken);
+        if (!SocketsAvailable(snapshot))
+        {
+            TextRenderer.RenderDiagnostics(snapshot.Diagnostics, error);
+            return ExitCodes.RuntimeFailure;
+        }
+
+        ExposureVerificationReport report;
+        try
+        {
+            report = new ExposureVerificationService().Verify(
+                Version,
+                options.VerifyTarget!,
+                vantage,
+                nmap,
+                supplemental,
+                snapshot,
+                portMappings,
+                options.IncludeFirewall);
+        }
+        catch (VerificationInputException exception)
+        {
+            error.WriteLine($"error: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+
+        string? serializedReport = null;
+        if (options.Json || validatedOutputPath is not null)
+        {
+            serializedReport = JsonOutput.Serialize(
+                options.IncludePrivate ? report : ExposureVerificationRedactor.Redact(report));
+        }
+
+        if (validatedOutputPath is not null)
+        {
+            var revalidation = LocalPathPolicy.ValidateOptionalImportOutputFile(validatedOutputPath);
+            if (!revalidation.IsValid
+                || !string.Equals(validatedOutputPath, revalidation.FullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                error.WriteLine(
+                    $"error: {revalidation.Code}: the verification output path changed or became unsafe during collection.");
+                return ExitCodes.UsageOrSchema;
+            }
+
+            try
+            {
+                await WriteOutputFileAsync(
+                    revalidation.FullPath!,
+                    serializedReport!,
+                    options.Force,
+                    cancellationToken);
+            }
+            catch (IOException exception)
+            {
+                error.WriteLine($"error: could not write verification report: {exception.Message}");
+                return ExitCodes.UsageOrSchema;
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                error.WriteLine($"error: could not write verification report: {exception.Message}");
+                return ExitCodes.RuntimeFailure;
+            }
+        }
+
+        if (options.Json)
+        {
+            await output.WriteLineAsync(serializedReport!);
+        }
+        else
+        {
+            ExposureVerificationTextRenderer.Render(report, output, error);
+            if (validatedOutputPath is not null)
+            {
+                output.WriteLine($"JSON report: {validatedOutputPath}");
+            }
+        }
+
+        return options.Strict && !report.Summary.IsComplete
+            ? ExitCodes.IncompleteEvidence
+            : ExitCodes.Success;
     }
 
     private async Task<int> RunListAsync(
@@ -1324,6 +1530,8 @@ public sealed class CliApplication
         output.WriteLine("  portcve scan-host <target> --authorized  Discover and fingerprint authorized TCP services");
         output.WriteLine("  portcve import nmap <scan.xml>  Normalize existing Nmap XML evidence");
         output.WriteLine("  portcve import nuclei <file>    Normalize existing Nuclei JSONL evidence");
+        output.WriteLine("  portcve import nessus <file>    Normalize an existing Nessus report");
+        output.WriteLine("  portcve verify <nmap.xml> --target <host>  Join outside-in evidence to live Windows owners");
         output.WriteLine("  portcve watch --json             Stream endpoint changes as JSONL");
         output.WriteLine("  portcve doctor                  Check collection coverage and privacy mode");
         output.WriteLine();
@@ -1350,7 +1558,11 @@ public sealed class CliApplication
         output.WriteLine("  --online-advisories                 Explicitly query NVD for strong catalog-backed identities");
         output.WriteLine("  --concurrency <1-512> / --rate <n>  Bound remote parallelism and connections per second");
         output.WriteLine("  --max-hosts <1-65536>               Bound CIDR expansion (default 256)");
-        output.WriteLine("  -o, --output <path>                 Write a lock, snapshot, remote, or import report");
+        output.WriteLine("  --target <host-or-IP>               Assert the imported host represented by this Windows machine");
+        output.WriteLine("  --nuclei / --nessus <path>          Add scanner findings to verify correlation");
+        output.WriteLine("  --vantage <label>                   Label the imported scanner's operator-supplied vantage");
+        output.WriteLine("  --port-map <external=local,...>     Correlate forwarding, for example tcp/443=tcp/8443");
+        output.WriteLine("  -o, --output <path>                 Write a lock, snapshot, remote, import, or verification report");
         output.WriteLine("  --force                             Replace an existing output file");
         output.WriteLine("  --interval <duration>               Watch interval, for example 500ms or 2s");
         output.WriteLine();

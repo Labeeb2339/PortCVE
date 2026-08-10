@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using PortCVE.Domain;
+using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Collection;
 
@@ -143,12 +144,19 @@ public sealed class WindowsOwnerCollector
             limitations);
     }
 
-    private static string? TryHashBinary(string path, List<string> limitations)
+    internal static string? TryHashBinary(string path, List<string> limitations)
     {
+        var validation = LocalPathPolicy.ValidateExistingProcessImage(path);
+        if (!validation.IsValid)
+        {
+            limitations.Add("Binary hash unavailable: the process image is not a validated local non-reparse file.");
+            return null;
+        }
+
         try
         {
             using var stream = new FileStream(
-                path,
+                validation.FullPath!,
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
