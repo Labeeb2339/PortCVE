@@ -108,7 +108,7 @@ The performance harness passed its enforced budgets with ten local-inventory ite
 
 Fresh Windows Server 2022 and 2025 CI jobs, each including the live loopback and smaller performance harness, are configured in `.github/workflows/ci.yml`. Compatibility is claimed only after those jobs pass on the published commit.
 
-## Claim boundary
+## Limitations
 
 The evidence above supports the tested Windows collection, Docker tuple-correlation, Trivy adapter, authorized loopback discovery/adaptive HTTP, parsers, redaction, schemas, cleanup, and exit-policy paths. It does not prove:
 

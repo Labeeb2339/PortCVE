@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-PortCVE is currently alpha software and has no finalized signed PortCVE release yet. The historical unsigned `v0.1.0-alpha.1` BindWitness-era artifact is not a supported daily-use distribution. Once signed PortCVE releases begin, only the latest release line will receive security fixes unless a release note says otherwise.
+PortCVE is alpha software and has no supported binary release yet. Once signed releases begin, only the latest release line will receive security fixes unless a release note says otherwise.
 
 ## Report a vulnerability
 

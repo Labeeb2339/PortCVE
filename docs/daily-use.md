@@ -174,4 +174,4 @@ powershell.exe -NoProfile -ExecutionPolicy AllSigned `
     -Uninstall
 ```
 
-See [install.md](install.md) for the signature, checksum, rollback, custom-directory, and portable-ZIP details. See [cli.md](cli.md) for the complete option and evidence contract.
+See [install.md](install.md) for signature, checksum, rollback, custom-directory, and portable-ZIP details. See [cli.md](cli.md) for the complete command, JSON, and exit-code reference.

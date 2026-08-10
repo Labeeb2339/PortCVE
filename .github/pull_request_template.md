@@ -1,14 +1,14 @@
-## Purpose
+## What changed
 
-Describe the user-visible problem and the evidence contract this change affects.
+Explain the problem and the user-visible change.
 
 ## Safety and compatibility
 
-- [ ] No command gained implicit network access, privilege escalation, destructive behavior, or a weaker authorization gate.
-- [ ] Privacy-reduced output and `--include-private` behavior were reviewed.
-- [ ] Incomplete evidence still fails closed for `--strict` and finding gates.
-- [ ] Versioned JSON/schema or CLI compatibility changes are documented and tested.
-- [ ] New third-party actions and dependencies are pinned and justified.
+- [ ] Any new network access, privilege requirement, or destructive behavior is documented.
+- [ ] Default and `--include-private` output were reviewed for sensitive data.
+- [ ] `--strict` and finding gates still fail when required data is incomplete.
+- [ ] CLI or JSON schema changes are documented and tested.
+- [ ] New dependencies and GitHub Actions are pinned and justified.
 
 ## Verification
 
@@ -18,4 +18,4 @@ Describe the user-visible problem and the evidence contract this change affects.
 - [ ] `dotnet test PortCVE.sln -c Release --no-build --no-restore`
 - [ ] Relevant PowerShell/live harnesses passed, or the omission is explained below.
 
-Sanitized evidence and omitted gates:
+Notes, omitted checks, or sanitized test data:

@@ -1,74 +1,65 @@
-# PortCVE release signing
+# Release signing
 
-PortCVE's public Windows releases are fail-closed: the release workflow cannot publish an unsigned executable or production installer. A candidate is built and tested without signing credentials, the installer is finalized as UTF-8 with BOM, both files are approved through the protected `release-signing` environment and signed by SSL.com eSigner, independently verified, packaged, checksummed, attested, uploaded as a draft, and published only after GitHub reports matching SHA-256 asset digests.
+This is the maintainer runbook for Windows releases. The workflow is fail-closed: it cannot publish a PortCVE release unless both `portcve.exe` and `install.ps1` pass the configured signing and verification checks.
 
-This document is an operator runbook, not evidence that the current repository or certificate account is already configured. The repository cannot create a trusted publisher identity by itself. Before the first signed release, Labeeb must complete external certificate-provider identity validation, activate the signing credential, and configure the protected GitHub environment and secrets. Until those external steps are evidenced, the workflow must fail closed and no build should be described as signed or daily-ready.
+No signed PortCVE release exists yet. The workflow remains blocked until a verified publisher certificate and production eSigner credentials are configured.
 
-## Malaysia signing route
+## Prerequisites
 
-For a maintainer or organization based in Malaysia, SSL.com eSigner is the practical route currently wired into the workflow. The certificate holder must complete SSL.com's identity validation and obtain a code-signing credential that can be used with eSigner automation. The Windows publisher shown to users will be the validated legal subject in the certificate; it cannot honestly be made an arbitrary project nickname.
+The current workflow uses [SSL.com eSigner](https://www.ssl.com/products/software-integrity/signing-service/). The certificate subject becomes the publisher shown by Windows, so use the exact validated subject rather than a project nickname.
 
-SSL.com currently lists an Individual Validation Authenticode certificate from USD 129 per year and eSigner Tier 1 at USD 15 per month for 240 signings, before tax. The validated personal or organization name becomes the Windows publisher and the signing key remains in SSL.com's cloud HSM. Pricing, quotas, and eligibility can change, so confirm them before purchase:
+Configure the `release-signing` GitHub environment with these secrets:
 
-- [SSL.com Individual Validation code signing](https://www.ssl.com/products/software-integrity/code-signing/iv/)
-- [SSL.com eSigner pricing](https://www.ssl.com/guide/esigner-pricing-for-code-signing/)
-- [SSL.com eSigner automation setup](https://www.ssl.com/how-to/automate-esigner-ev-code-signing/)
+- `ES_USERNAME`
+- `ES_PASSWORD`
+- `CREDENTIAL_ID`
+- `ES_TOTP_SECRET`
 
-Expect government-ID, address, and liveness checks for an individual, or company-registration and authorized-representative checks for an organization. Keep the eSigner automation credential dedicated to PortCVE releases and grant only the access it needs.
+Set the repository variable `EXPECTED_SIGNER_SUBJECT` to the complete X.500 subject returned by a controlled test signature:
 
-Microsoft Artifact Signing Public Trust is not currently a fallback for a Malaysian individual or Malaysia-incorporated organization. Microsoft's published eligibility limits individuals to the United States and Canada and organizations to the United States, Canada, the European Union, and the United Kingdom. Recheck the official [Artifact Signing prerequisites](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) if Microsoft expands availability.
+```powershell
+(Get-AuthenticodeSignature -LiteralPath .\portcve.exe).SignerCertificate.Subject
+```
 
-An OV or EV certificate does not guarantee an immediate Microsoft Defender SmartScreen reputation. Microsoft describes reputation as based on signals including download history and antivirus results; do not promise that EV automatically removes warnings. See [Microsoft Defender SmartScreen and app reputation](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
+The value must match Windows output exactly, including ordering, punctuation, and whitespace.
 
-## Required GitHub configuration
+Required repository controls:
 
-Configure these controls before creating a release tag:
+- `main` changes go through a pull request and required CI checks;
+- tags matching `v*` are protected;
+- releases are immutable;
+- GitHub Actions are pinned to full commit SHAs; and
+- `release-signing` is limited to the release-tag policy, has a wait timer and approval gate, and does not allow administrator bypass.
 
-1. Create an environment named exactly `release-signing`.
-2. The current solo-maintainer environment has a five-minute wait timer, requires approval from `Labeeb2339`, and restricts deployments with the custom `v*` tag policy. This is an explicit manual gate, not separation of duties: with Labeeb as the sole reviewer, prevent-self-review cannot be enabled, and administrators can currently bypass the environment. When another trusted maintainer is available, require that independent reviewer, enable prevent-self-review, and remove administrator bypass before making a stable high-assurance release claim. GitHub documents these controls under [deployment environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments).
-3. Store these four values as environment secrets, never repository files or ordinary variables:
-   - `ES_USERNAME`
-   - `ES_PASSWORD`
-   - `CREDENTIAL_ID`
-   - `ES_TOTP_SECRET`
-4. Create the repository variable `EXPECTED_SIGNER_SUBJECT`. Its value must be the complete X.500 subject returned by `Get-AuthenticodeSignature`, with exact spelling, ordering, punctuation, and whitespace. A simple common name is insufficient. For example, capture it from a controlled SSL.com test-signed executable:
+The current solo-maintainer approval is a manual checkpoint, not separation of duties. Add a second trusted reviewer and enable prevent-self-review before describing the release process as independently approved.
 
-   ```powershell
-   (Get-AuthenticodeSignature -LiteralPath .\portcve.exe).SignerCertificate.Subject
-   ```
+## Workflow
 
-5. Enable [immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases). The workflow queries the repository setting and fails before creating a draft if it is disabled.
-6. Protect `main` with a ruleset requiring reviews and passing CI. Restrict who can create tags matching `v*`. If available for the repository, require actions to be pinned to full commit SHAs.
+`.github/workflows/release.yml` has three jobs:
 
-GitHub should also limit the `release-signing` environment's deployment tag pattern to the narrowest pattern the UI supports. The workflow still performs its own exact SemVer, annotated-tag, project-version, and `origin/main` ancestry checks because an environment pattern alone is not sufficient.
+1. `build` restores locked dependencies, checks formatting, builds and tests, runs the installer harness, publishes one unsigned executable, and smoke-tests it. This job has no signing secrets.
+2. `sign` runs behind the protected environment. It finalizes the installer, signs the executable and installer separately, and verifies both files.
+3. `package_publish` repeats verification, packages the signed executable, writes checksums and signing metadata, creates provenance attestations, uploads a draft release, verifies GitHub's asset digests, and then publishes it.
 
-## What the workflow enforces
+Signing secrets are exposed only to the configuration check and the two pinned eSigner steps.
 
-The workflow in `.github/workflows/release.yml` has three security boundaries:
+Verification requires:
 
-- `build` has read-only repository access and no signing secrets. It restores locked dependencies, checks formatting, builds, tests, runs the clean install/update/failed-update rollback/uninstall fixture under Windows PowerShell 5.1, publishes exactly one unsigned `portcve.exe`, and smoke-tests it.
-- `sign` runs only after approval in `release-signing`. It fails if any secret or the expected full signer subject is missing. It finalizes `install.ps1` with a UTF-8 BOM, verifies the exact SHA-256 of SSL.com CodeSignTool 1.3.0, and invokes the pinned SSL.com action separately for the exact `portcve.exe` and `install.ps1` paths.
-- `package_publish` has the release and attestation permissions. It downloads only the two verified signed files, repeats signature verification, creates `portcve-<tag>-win-x64.zip`, proves that the ZIP, standalone executable, and signing metadata contain the exact same signed executable hash, writes a checksum for every public asset other than the checksum file itself, generates GitHub provenance attestations, creates a draft, checks GitHub's recorded asset digests, and only then publishes it.
+- `signtool verify /pa /all /v` to accept the executable;
+- `Get-AuthenticodeSignature` to report `Valid`;
+- an exact match with `EXPECTED_SIGNER_SUBJECT`;
+- the Code Signing and Time Stamping EKUs;
+- one SHA-256 Authenticode signature and one timestamp; and
+- PowerShell 7.2 or newer to decode the RFC 3161 token, bind it to the primary signature with `VerifySignatureForSignerInfo`, and match the returned TSA certificate to the Windows-trusted timestamp certificate.
 
-Signature verification requires all of the following:
-
-- for `portcve.exe`, `signtool verify /pa /all /v` succeeds with exactly one SHA-256 signature, one validated timestamp, zero warnings, and zero errors;
-- `Get-AuthenticodeSignature` reports `Valid`;
-- the signer's full subject is an ordinal, exact match for `EXPECTED_SIGNER_SUBJECT`;
-- the signer certificate contains Code Signing EKU `1.3.6.1.5.5.7.3.3`;
-- a timestamp certificate containing Time Stamping EKU `1.3.6.1.5.5.7.3.8` is present; and
-- under PowerShell 7.2 or newer, the PE certificate table or PowerShell signature block contains exactly one RFC 3161 token, with no legacy countersignature; `Rfc3161TimestampToken.TryDecode` consumes the complete token, `VerifySignatureForSignerInfo` cryptographically binds its message imprint to the primary Authenticode `SignerInfo`, and the returned TSA certificate exactly matches the Windows-trusted timestamp certificate.
-
-The release verifier fails if the PowerShell 7 platform primitive is unavailable, or if a token is malformed, has trailing data, is unbound, has an invalid signature, uses a different TSA certificate, is duplicated, or is accompanied by a legacy countersignature. Windows PowerShell 5.1 cannot access this .NET primitive. The production installer therefore makes the narrower claim that Windows reports the Authenticode signature and timestamp as trusted and that both required EKUs are present; it does not perform or claim an independent RFC 3161 binding proof.
-
-There is no unsigned fallback. Missing credentials, a changed action/tool download, unexpected files, a wrong subject, a missing timestamp, a failed smoke test, a checksum mismatch, failed provenance, or a release API error stops publication.
+Malformed, duplicated, unbound, legacy, or mismatched timestamp data stops the release. There is no unsigned fallback.
 
 ## Release procedure
 
-1. Confirm CI is green on `main` and the worktree is clean.
-2. Update `<Version>` in `src/PortCVE/PortCVE.csproj` to the exact intended SemVer and merge it to `main`.
-3. Review every third-party action commit and the CodeSignTool archive hash. Update pins only in a dedicated reviewed change.
-4. Create an annotated tag at the reviewed `main` commit. A maintainer with a configured signing key should prefer a cryptographically signed annotated tag:
+1. Merge the intended version change to `main` and wait for CI and CodeQL.
+2. Confirm the worktree is clean and the project version matches the intended tag.
+3. Review changes to action pins, signing tools, or release scripts separately.
+4. Create an annotated tag at the reviewed `main` commit. Use a signed Git tag when a maintainer signing key is configured:
 
    ```powershell
    git switch main
@@ -77,95 +68,59 @@ There is no unsigned fallback. Missing credentials, a changed action/tool downlo
    git push origin v1.0.0
    ```
 
-   If signed Git tags are not yet configured, `git tag -a` satisfies the workflow's annotated-tag check, but the binary-signing and release controls remain the security boundary.
+5. Approve the `release-signing` deployment only after checking the tag, commit, workflow diff, and expected publisher subject.
+6. Confirm signature verification, signed smoke tests, checksums, provenance, and asset-digest checks all passed.
+7. Download the release on a clean Windows machine and test the portable ZIP plus managed install, update, rollback, and uninstall paths.
 
-5. Review and approve the `release-signing` environment deployment only after confirming the tag, commit SHA, workflow diff, and expected publisher subject.
-6. Confirm the workflow's signature verification, signed smoke test, metadata validation, provenance attestation, draft digest verification, and final publish steps all passed.
-7. Download the published assets on a clean separate Windows machine and run the checksum, signature, portable ZIP, and managed lifecycle checks below. Record install, update, explicit rollback, and uninstall results.
+Stable tags use `vMAJOR.MINOR.PATCH`. Prereleases use forms such as `v1.0.0-rc.1`. The workflow and installer share the same tag parser.
 
-Stable tags such as `v1.0.0` publish as the latest stable release. Policy-compatible prerelease tags such as `v1.0.0-rc.1` publish as prereleases. Numeric identifiers with leading zeroes, prerelease identifiers beginning with a hyphen, and build metadata such as `+build.5` are intentionally rejected by the same rule in the workflow and installer.
+## Verify downloaded assets
 
-## Consumer verification
-
-From a clean checkout of the exact release tag, with the downloaded release assets placed at the repository root:
+From a clean checkout of the release tag, place the downloaded assets in the repository root and run:
 
 ```powershell
-$expected = (Get-Content -LiteralPath .\SHA256SUMS.txt | ForEach-Object {
+$expected = Get-Content -LiteralPath .\SHA256SUMS.txt | ForEach-Object {
     $hash, $name = $_ -split '\s+', 2
     [pscustomobject]@{ Hash = $hash; Name = $name }
-})
+}
+
 foreach ($entry in $expected) {
-    $actual = (Get-FileHash -LiteralPath (Join-Path $PWD $entry.Name) -Algorithm SHA256).Hash.ToLowerInvariant()
+    $path = Join-Path $PWD $entry.Name
+    $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -cne $entry.Hash) { throw "Checksum mismatch: $($entry.Name)" }
 }
 
 pwsh -NoProfile -File .\scripts\Verify-ReleaseSignature.ps1 `
     -Path .\portcve.exe `
-    -ExpectedSignerSubject 'PASTE THE EXACT PUBLISHED FULL X.500 SUBJECT'
+    -ExpectedSignerSubject 'PASTE THE PUBLISHED FULL X.500 SUBJECT'
 
 pwsh -NoProfile -File .\scripts\Verify-ReleaseSignature.ps1 `
     -Path .\install.ps1 `
-    -ExpectedSignerSubject 'PASTE THE EXACT PUBLISHED FULL X.500 SUBJECT'
+    -ExpectedSignerSubject 'PASTE THE PUBLISHED FULL X.500 SUBJECT'
 ```
 
-GitHub provenance can also be verified with GitHub CLI after authenticating:
+If GitHub CLI is available, verify provenance as well:
 
 ```powershell
 gh attestation verify .\portcve.exe --repo Labeeb2339/PortCVE
 gh attestation verify .\portcve-v1.0.0-win-x64.zip --repo Labeeb2339/PortCVE
 ```
 
-On the clean verification machine, exercise the supported lifecycle with the downloaded, checksum-verified, Authenticode-valid `install.ps1`:
+Then exercise the signed installer on a clean machine as described in [install.md](install.md).
 
-```powershell
-# Clean install of the candidate.
-powershell.exe -NoProfile -ExecutionPolicy AllSigned -File .\install.ps1 -Version v1.1.0
-portcve --version
+## Before 1.0
 
-# Update or deliberate rollback use the same signed installer and exact tags.
-powershell.exe -NoProfile -ExecutionPolicy AllSigned -File .\install.ps1 -Version v1.0.0
-portcve --version
-powershell.exe -NoProfile -ExecutionPolicy AllSigned -File .\install.ps1 -Version v1.1.0
-portcve --version
+Do not publish `v1.0.0` until all of these are true:
 
-# Uninstall is offline and must remove the exact managed directory and PATH entry.
-powershell.exe -NoProfile -ExecutionPolicy AllSigned -File .\install.ps1 -Uninstall
-if (Test-Path "$env:LOCALAPPDATA\Programs\PortCVE") { throw 'PortCVE uninstall left its managed directory.' }
-```
+- the publisher certificate and production eSigner credential are active;
+- a controlled test signature established the reviewed full signer subject;
+- the complete production workflow passed on a prerelease tag;
+- both downloaded files passed SignTool, Authenticode, EKU, and RFC 3161 binding checks;
+- the portable ZIP and standalone executable contain the same signed binary recorded in `SIGNING-METADATA.json`;
+- checksums and GitHub provenance verify after download;
+- a clean Windows machine completed install, update, rollback, and receipt-bound uninstall testing; and
+- release notes describe SmartScreen and vulnerability results without promising warning-free execution or exploitability.
 
-Replace the example tags with two actual compatible signed releases. For the first signed release, the offline Windows PowerShell fixture is the rollback evidence until a second signed release exists; do not invent an end-to-end cross-release result. Repeat the lifecycle with `-InstallDirectory` for the supported custom-path case. Open a new terminal before each `portcve --version` check so it receives the current user `PATH`.
+Record the release URL, workflow run, executable SHA-256, signer subject, and verification-machine details. Never record signing secrets or authentication logs.
 
-## Pre-1.0 release gate
-
-Do not call a build `1.0.0` until every item is evidenced:
-
-- SSL.com validation and the production eSigner credential are active.
-- `EXPECTED_SIGNER_SUBJECT` was copied from a controlled test signature and independently reviewed.
-- `release-signing` has the recorded wait timer, explicit approval, and release-tag restriction. Before a stable high-assurance claim, an independent trusted reviewer is required and prevent-self-review plus no-administrator-bypass are enabled; the current solo-maintainer approval alone does not satisfy separation of duties.
-- `main` and `v*` tags are protected, immutable releases are enabled, and action SHA pinning is enforced where available.
-- A prerelease completed the entire production signing workflow without manual artifact substitution.
-- The PowerShell 7 release verifier accepted both downloaded signed files with the exact subject, Code Signing and Time Stamping EKUs, and a `VerifySignatureForSignerInfo` RFC 3161 binding proof; SignTool also accepted the executable's SHA-256 signature.
-- Windows PowerShell 5.1 parsed the finalized UTF-8 BOM installer with the exact non-ASCII test subject, and the installer rejected unsigned or in-memory execution before network or install-directory mutation.
-- The Windows PowerShell 5.1 offline lifecycle fixture passed clean install, managed update, invalid installed-signature rejection, executable/installer/receipt tamper rejection, pre-commit failed-update rollback, exact PATH removal, receipt rejection, and guarded uninstall checks without adding a production bypass or trusting a test root CA.
-- `portcve.exe --version` and a no-firewall snapshot smoke test passed after signing and after download.
-- Every file in `SHA256SUMS.txt` matched, the installer rejected a tampered ZIP/executable, and GitHub provenance verification passed.
-- The portable ZIP, standalone `portcve.exe`, and `SIGNING-METADATA.json` contain the same signed executable hash.
-- A clean Windows machine completed managed install, update, explicit signed-version rollback, and receipt-bound offline uninstall; if only one signed release exists, record that cross-release rollback remains pending instead of claiming it passed.
-- Release notes, license, security policy, schema files, and vulnerability-data limitations are accurate for 1.0.
-- Defender/SmartScreen behavior was observed on a clean Windows machine and described honestly, without promising reputation or warning-free execution.
-
-Record the test tag, release URL, workflow run ID, executable SHA-256, signer subject, and verification machine details in the release evidence. Never record the four eSigner secrets or authentication logs.
-
-## Historical BindWitness-era release
-
-The public `v0.1.0-alpha.1` prerelease was created before the repository was renamed. Its description now identifies it as historical and unsigned and uses the current PortCVE changelog URL. Its two historical assets remain `bindwitness-v0.1.0-alpha.1-win-x64.zip` and `SHA256SUMS.txt`; they must not be presented as current PortCVE artifacts.
-
-If the release description is ever repaired again, change only its explanatory text and keep this claim boundary:
-
-```markdown
-Historical unsigned BindWitness-era prerelease. This artifact is not accepted by the PortCVE signed installer and is not recommended for daily use.
-
-Full Changelog: https://github.com/Labeeb2339/PortCVE/commits/v0.1.0-alpha.1
-```
-
-Do not rename, replace, or re-upload the historical assets as PortCVE binaries. Future workflow-generated releases use the current `Labeeb2339/PortCVE` repository and exact `portcve.exe`, `install.ps1`, `portcve-<tag>-win-x64.zip`, `SHA256SUMS.txt`, and `SIGNING-METADATA.json` asset names.
+The old `v0.1.0-alpha.1` BindWitness release is historical and unsigned. It is not accepted by the PortCVE installer; see [CHANGELOG.md](../CHANGELOG.md).

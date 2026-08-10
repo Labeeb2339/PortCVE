@@ -64,7 +64,7 @@ attempted only when adaptive HTTP is not confirmed, and HTTPS additionally
 requires HTTP/1.1 ALPN. The harness passes only its two exact OS-assigned ports
 to PortCVE; it never performs a range or common-port scan.
 
-## Claim boundary
+## Limitations
 
 This validates loopback TCP discovery, adaptive HTTP fingerprinting on an
 OS-assigned nonstandard port, output privacy modes, and cleanup on the tested

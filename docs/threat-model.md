@@ -88,7 +88,7 @@ JSON snapshots are redacted by default, but they are not anonymous. Ports, scope
 
 Docker collection uses the local `\\.\pipe\docker_engine` IPC endpoint. It does not contact a TCP Docker endpoint, pull an image, start a container, or execute inside one.
 
-The dated live fixture described in the README validated TCP and UDP echo, independent host-tuple observation, correlation by the then-named BindWitness build, complete container-image lock evidence, an unchanged pass, and `owner_changed` after host-owner replacement. That evidence supports the local integration path only; it does not reduce the external-reachability, guest-ownership, WSL/Kubernetes, or cross-version boundaries above.
+The dated live fixture recorded in [validation.md](validation.md) validated TCP and UDP echo, independent host-tuple observation, container correlation, complete container-image lock evidence, an unchanged pass, and `owner_changed` after host-owner replacement. That result covers the tested local integration path only; it does not change the external-reachability, guest-ownership, WSL/Kubernetes, or cross-version limits above.
 
 Account-name resolution is off by default. `--resolve-accounts` uses Windows `LookupAccountSid`, which can contact a domain controller or global catalog when data is not available locally. This opt-in weakens the otherwise local/offline collection boundary and is documented separately from `--include-private`.
 

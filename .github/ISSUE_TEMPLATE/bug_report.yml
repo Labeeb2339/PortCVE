@@ -1,5 +1,5 @@
 name: Bug report
-description: Report reproducible incorrect behavior, a crash, or an evidence-quality problem.
+description: Report a reproducible bug, crash, or misleading result.
 title: "[Bug]: "
 labels:
   - bug
@@ -21,8 +21,6 @@ body:
     attributes:
       label: Installation method
       options:
-        - Signed managed installer
-        - Signed portable ZIP
         - Built from source
         - Other
     validations:
