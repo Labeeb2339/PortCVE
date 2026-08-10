@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:portcve:schema:import:v1",
+  "title": "PortCVE external evidence import v1",
+  "description": "Bounded normalization of user-supplied Nmap XML or Nuclei JSONL. Imported matches remain external observations and do not establish exploitability.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool_version",
+    "generated_at",
+    "input",
+    "source",
+    "is_complete",
+    "endpoints",
+    "findings",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tool_version": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "input": { "$ref": "#/$defs/input" },
+    "source": { "enum": ["nmap_xml", "nuclei_jsonl"] },
+    "source_version": { "type": "string", "minLength": 1 },
+    "is_complete": { "type": "boolean" },
+    "endpoints": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/endpoint" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "evidence_strength": {
+      "enum": ["direct", "strong", "moderate", "weak", "conflicting", "unresolved"]
+    },
+    "claim_status": {
+      "enum": ["observed", "candidate", "imported_match", "inconclusive"]
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_name", "size_bytes", "sha256"],
+      "properties": {
+        "file_name": { "type": "string", "minLength": 1 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpes", "evidence_strength", "evidence_source"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "product": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "extra_info": { "type": "string", "minLength": 1 },
+        "cpes": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "evidence_strength": { "$ref": "#/$defs/evidence_strength" },
+        "evidence_source": { "type": "string", "minLength": 1 }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "protocol", "port", "state"],
+      "properties": {
+        "target": { "type": "string", "minLength": 1 },
+        "hostname": { "type": "string", "minLength": 1 },
+        "protocol": { "enum": ["tcp", "udp"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "state": { "type": "string", "minLength": 1 },
+        "state_reason": { "type": "string", "minLength": 1 },
+        "service": { "$ref": "#/$defs/service" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "finding_id",
+        "title",
+        "severity",
+        "target",
+        "claim_status",
+        "evidence_strength",
+        "advisory_ids",
+        "references",
+        "source_record_sha256"
+      ],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "finding_id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["unknown", "info", "low", "medium", "high", "critical"] },
+        "target": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "protocol": { "type": "string", "minLength": 1 },
+        "claim_status": { "$ref": "#/$defs/claim_status" },
+        "evidence_strength": { "$ref": "#/$defs/evidence_strength" },
+        "advisory_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "references": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "source_record_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "matcher": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

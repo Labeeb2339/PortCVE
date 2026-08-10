@@ -1,5 +1,6 @@
 using System.Globalization;
 using PortCVE.Domain;
+using PortCVE.Remote.Imports;
 using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Cli;
@@ -33,6 +34,17 @@ public static class CliParser
         var all = false;
         string? sbomPath = null;
         VulnerabilitySeverity? failOn = null;
+        string? remoteTarget = null;
+        string? remotePorts = null;
+        var active = false;
+        var authorized = false;
+        var onlineAdvisories = false;
+        int? concurrency = null;
+        int? rate = null;
+        TimeSpan? connectTimeout = null;
+        TimeSpan? readTimeout = null;
+        int? maximumHosts = null;
+        RemoteImportFormat? importFormat = null;
         TimeSpan? interval = null;
         int? iterations = null;
         var index = 0;
@@ -47,6 +59,22 @@ public static class CliParser
                 port = queryPort;
                 index++;
             }
+            else if (first.Equals("db", StringComparison.OrdinalIgnoreCase))
+            {
+                if (arguments.Count < 2)
+                {
+                    throw new CliUsageException("db requires exactly one action: db <status|update>.");
+                }
+
+                command = arguments[1].ToLowerInvariant() switch
+                {
+                    "status" => CommandKind.DbStatus,
+                    "update" => CommandKind.DbUpdate,
+                    "-h" or "--help" => CommandKind.Help,
+                    _ => throw new CliUsageException("db action must be status or update."),
+                };
+                index += 2;
+            }
             else
             {
                 command = first.ToLowerInvariant() switch
@@ -54,6 +82,8 @@ public static class CliParser
                     "list" or "ls" => CommandKind.List,
                     "inspect" or "explain" => CommandKind.Inspect,
                     "scan" => CommandKind.Scan,
+                    "scan-host" or "host" => CommandKind.ScanHost,
+                    "import" => CommandKind.Import,
                     "lock" => CommandKind.Lock,
                     "snapshot" => CommandKind.Snapshot,
                     "diff" => CommandKind.Diff,
@@ -134,6 +164,33 @@ public static class CliParser
                 case "--fail-on":
                     failOn = ParseVulnerabilitySeverity(RequireValue(arguments, ref index, argument));
                     break;
+                case "--ports":
+                    remotePorts = RequireValue(arguments, ref index, argument);
+                    break;
+                case "--active":
+                    active = true;
+                    break;
+                case "--authorized":
+                    authorized = true;
+                    break;
+                case "--online-advisories" or "--nvd":
+                    onlineAdvisories = true;
+                    break;
+                case "--concurrency":
+                    concurrency = ParseBoundedInt(RequireValue(arguments, ref index, argument), argument, 1, 512);
+                    break;
+                case "--rate":
+                    rate = ParseBoundedInt(RequireValue(arguments, ref index, argument), argument, 1, 10000);
+                    break;
+                case "--connect-timeout":
+                    connectTimeout = ParseProbeDuration(RequireValue(arguments, ref index, argument), argument);
+                    break;
+                case "--read-timeout":
+                    readTimeout = ParseProbeDuration(RequireValue(arguments, ref index, argument), argument);
+                    break;
+                case "--max-hosts":
+                    maximumHosts = ParseBoundedInt(RequireValue(arguments, ref index, argument), argument, 1, 65536);
+                    break;
                 case "-p" or "--port":
                     port = ParsePort(RequireValue(arguments, ref index, argument));
                     break;
@@ -190,6 +247,34 @@ public static class CliParser
             positionals.RemoveAt(0);
         }
 
+        if (command == CommandKind.ScanHost)
+        {
+            if (positionals.Count == 0)
+            {
+                throw new CliUsageException("scan-host requires an IP address, hostname, or IPv4 CIDR.");
+            }
+
+            remoteTarget = positionals[0];
+            positionals.RemoveAt(0);
+        }
+
+        if (command == CommandKind.Import)
+        {
+            if (positionals.Count < 2)
+            {
+                throw new CliUsageException("import requires a format and local input path: import <nmap|nuclei> <path>.");
+            }
+
+            importFormat = positionals[0].ToLowerInvariant() switch
+            {
+                "nmap" or "nmap-xml" => RemoteImportFormat.NmapXml,
+                "nuclei" or "nuclei-jsonl" => RemoteImportFormat.NucleiJsonl,
+                _ => throw new CliUsageException("import format must be nmap or nuclei."),
+            };
+            input = positionals[1];
+            positionals.RemoveRange(0, 2);
+        }
+
         if (command is CommandKind.Diff or CommandKind.Check)
         {
             if (positionals.Count == 0)
@@ -242,9 +327,73 @@ public static class CliParser
                     "scan accepts only its TCP selector, --all, --sbom, --fail-on, --json, --include-private, and --strict.");
             }
         }
+        else if (command == CommandKind.ScanHost)
+        {
+            if (port is not null || protocol is not null || process is not null || scope is not null
+                || firewall || firewallExplicitlyDisabled || evidence || includeUdp || resolveAccounts
+                || interval is not null || iterations is not null || force || allowIncomplete || all
+                || sbomPath is not null)
+            {
+                throw new CliUsageException(
+                    "scan-host accepts its target, --ports, --active, --authorized, --online-advisories, --concurrency, --rate, "
+                    + "--connect-timeout, --read-timeout, --max-hosts, --fail-on, --json, --output, "
+                    + "--include-private, and --strict.");
+            }
+
+            if (!authorized)
+            {
+                throw new CliUsageException(
+                    "scan-host requires --authorized to record the operator's authorization assertion.");
+            }
+
+            if (failOn is not null && !onlineAdvisories)
+            {
+                throw new CliUsageException(
+                    "scan-host --fail-on requires --online-advisories; an offline remote scan has no advisory source to gate.");
+            }
+        }
+        else if (command == CommandKind.Import)
+        {
+            if (port is not null || protocol is not null || process is not null || scope is not null
+                || firewall || firewallExplicitlyDisabled || evidence || includeUdp || includePrivate || resolveAccounts
+                || interval is not null || iterations is not null || allowIncomplete || all || sbomPath is not null
+                || failOn is not null)
+            {
+                throw new CliUsageException(
+                    "import accepts only its format and local input path, --json, --output, --force, and --strict.");
+            }
+        }
+        else if (command is CommandKind.DbStatus or CommandKind.DbUpdate)
+        {
+            if (port is not null || protocol is not null || process is not null || scope is not null
+                || input is not null || output is not null || firewall || firewallExplicitlyDisabled || evidence
+                || strict || force || allowIncomplete || includeUdp || resolveAccounts
+                || interval is not null || iterations is not null || all || sbomPath is not null || failOn is not null
+                || remoteTarget is not null || remotePorts is not null || active || authorized || onlineAdvisories
+                || concurrency is not null || rate is not null || connectTimeout is not null || readTimeout is not null
+                || maximumHosts is not null || importFormat is not null)
+            {
+                throw new CliUsageException(
+                    "db status/update accept only --json, --format <text|json>, and --include-private.");
+            }
+
+            if (includePrivate && !json)
+            {
+                throw new CliUsageException("db status/update --include-private requires JSON output.");
+            }
+        }
         else if (all || sbomPath is not null || failOn is not null)
         {
             throw new CliUsageException("--all, --sbom, and --fail-on are available only with scan.");
+        }
+
+        if (command != CommandKind.ScanHost
+            && (remotePorts is not null || active || authorized || onlineAdvisories || concurrency is not null || rate is not null
+                || connectTimeout is not null || readTimeout is not null || maximumHosts is not null))
+        {
+            throw new CliUsageException(
+                "--ports, --active, --authorized, --online-advisories, --concurrency, --rate, --connect-timeout, "
+                + "--read-timeout, and --max-hosts are available only with scan-host.");
         }
 
         if (command == CommandKind.Lock)
@@ -288,7 +437,18 @@ public static class CliParser
             iterations,
             all,
             sbomPath,
-            failOn);
+            failOn,
+            remoteTarget,
+            remotePorts,
+            active,
+            authorized,
+            onlineAdvisories,
+            concurrency,
+            rate,
+            connectTimeout,
+            readTimeout,
+            maximumHosts,
+            importFormat);
     }
 
     private static string RequireValue(IReadOnlyList<string> arguments, ref int index, string option)
@@ -385,6 +545,40 @@ public static class CliParser
         }
 
         return result;
+    }
+
+    private static int ParseBoundedInt(string value, string option, int minimum, int maximum)
+    {
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var result)
+            || result < minimum || result > maximum)
+        {
+            throw new CliUsageException($"{option} must be from {minimum} to {maximum}.");
+        }
+
+        return result;
+    }
+
+    private static TimeSpan ParseProbeDuration(string value, string option)
+    {
+        var factor = value.EndsWith("ms", StringComparison.OrdinalIgnoreCase) ? 1d
+            : value.EndsWith('s') ? 1000d
+            : 1000d;
+        var number = value.EndsWith("ms", StringComparison.OrdinalIgnoreCase) ? value[..^2]
+            : value.EndsWith('s') ? value[..^1]
+            : value;
+        if (!double.TryParse(number, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var amount)
+            || amount <= 0)
+        {
+            throw new CliUsageException($"{option} duration '{value}' is invalid. Examples: 250ms, 2s.");
+        }
+
+        var duration = TimeSpan.FromMilliseconds(amount * factor);
+        if (duration < TimeSpan.FromMilliseconds(50) || duration > TimeSpan.FromSeconds(30))
+        {
+            throw new CliUsageException($"{option} must be from 50ms to 30s.");
+        }
+
+        return duration;
     }
 
     private static VulnerabilitySeverity ParseVulnerabilitySeverity(string value) => value.ToLowerInvariant() switch

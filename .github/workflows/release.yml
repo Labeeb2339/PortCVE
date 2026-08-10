@@ -93,6 +93,10 @@ jobs:
       - name: Test
         run: dotnet test PortCVE.sln -c Release --no-build --logger "trx;LogFileName=release-tests.trx" --results-directory TestResults
 
+      - name: Test installer lifecycle under Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\tests\Test-Installer.ps1
+
       - name: Publish unsigned candidate
         run: dotnet publish src/PortCVE/PortCVE.csproj -c Release -r win-x64 --self-contained true --no-build --no-restore -o artifacts/unsigned
 
@@ -137,10 +141,6 @@ jobs:
     permissions:
       contents: read
     env:
-      ES_USERNAME: ${{ secrets.ES_USERNAME }}
-      ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
-      CREDENTIAL_ID: ${{ secrets.CREDENTIAL_ID }}
-      ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
       EXPECTED_SIGNER_SUBJECT: ${{ vars.EXPECTED_SIGNER_SUBJECT }}
 
     steps:
@@ -158,6 +158,11 @@ jobs:
 
       - name: Fail closed on missing signing configuration
         shell: pwsh
+        env:
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          CREDENTIAL_ID: ${{ secrets.CREDENTIAL_ID }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
@@ -433,10 +438,42 @@ jobs:
           Copy-Item -LiteralPath schema -Destination (Join-Path $packageRoot 'schema') -Recurse
 
           $zipName = "portcve-$($env:RELEASE_TAG)-win-x64.zip"
-          Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath (Join-Path $releaseRoot $zipName)
+          $zipPath = Join-Path $releaseRoot $zipName
+          Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $zipPath
           Copy-Item -LiteralPath artifacts/signed/portcve.exe -Destination $releaseRoot
           Copy-Item -LiteralPath artifacts/signed/install.ps1 -Destination $releaseRoot
           Copy-Item -LiteralPath artifacts/signed/SIGNING-METADATA.json -Destination $releaseRoot
+
+          Add-Type -AssemblyName System.IO.Compression
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $zipExecutables = @($archive.Entries | Where-Object {
+              [StringComparer]::Ordinal.Equals($_.FullName.Replace('\', '/'), 'portcve.exe')
+            })
+            if ($zipExecutables.Count -ne 1) {
+              throw "Portable ZIP must contain exactly one root portcve.exe; found $($zipExecutables.Count)."
+            }
+            $zipStream = $zipExecutables[0].Open()
+            $sha256 = [Security.Cryptography.SHA256]::Create()
+            try {
+              $zipExecutableHash = ([BitConverter]::ToString($sha256.ComputeHash($zipStream))).Replace('-', '').ToLowerInvariant()
+            }
+            finally {
+              $sha256.Dispose()
+              $zipStream.Dispose()
+            }
+          }
+          finally {
+            $archive.Dispose()
+          }
+
+          $signedExecutableHash = (Get-FileHash -LiteralPath artifacts/signed/portcve.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $signingMetadata = Get-Content -LiteralPath artifacts/signed/SIGNING-METADATA.json -Raw | ConvertFrom-Json
+          if (-not [StringComparer]::Ordinal.Equals($zipExecutableHash, $signedExecutableHash) -or
+              -not [StringComparer]::Ordinal.Equals([string]$signingMetadata.artifact.sha256, $signedExecutableHash)) {
+            throw 'Portable ZIP, standalone executable, and signing metadata do not contain the exact same signed executable.'
+          }
 
           $checksumTargets = @(Get-ChildItem -LiteralPath $releaseRoot -File | Sort-Object Name)
           $checksumLines = @($checksumTargets | ForEach-Object {

@@ -1,6 +1,9 @@
 using System.Text.Json;
 using PortCVE.Domain;
 using PortCVE.Output;
+using PortCVE.Remote;
+using PortCVE.Remote.Advisories;
+using PortCVE.Remote.Imports;
 using PortCVE.Snapshots;
 using PortCVE.Vulnerabilities;
 
@@ -50,6 +53,124 @@ public sealed class SchemaContractTests
             "portcve.vulnerability.v1.schema.json");
     }
 
+    [Fact]
+    public void PrivateAndReducedDatabaseDocumentsMatchPublishedSchema()
+    {
+        var status = new TrivyDatabaseStatus(
+            TrivyDatabaseDocument.CurrentSchemaVersion,
+            "trivy",
+            TrivyDatabaseOperation.Status,
+            TrivyDatabaseState.Ready,
+            true,
+            false,
+            "C:\\Tools\\trivy.exe",
+            "0.73.0",
+            "C:\\Cache\\trivy",
+            2,
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch.AddHours(6),
+            60,
+            (long)TimeSpan.FromHours(72).TotalSeconds,
+            5,
+            "ok",
+            "The local Trivy vulnerability database is ready.");
+        var privateDocument = TrivyDatabaseDocument.FromStatus(status, "test");
+
+        AssertSerializedShape(
+            JsonOutput.Serialize(privateDocument),
+            "portcve.database.v1.schema.json");
+        AssertSerializedShape(
+            JsonOutput.Serialize(TrivyDatabaseDocumentRedactor.Redact(privateDocument)),
+            "portcve.database.v1.schema.json");
+    }
+
+    [Fact]
+    public void DatabaseSchemaIdentityAndReleasePackagingAreStable()
+    {
+        var root = RepositoryRoot();
+        using var schema = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(root, "schema", "portcve.database.v1.schema.json")));
+
+        Assert.Equal(
+            "https://json-schema.org/draft/2020-12/schema",
+            schema.RootElement.GetProperty("$schema").GetString());
+        Assert.Equal(
+            "urn:portcve:schema:database:v1",
+            schema.RootElement.GetProperty("$id").GetString());
+        Assert.Equal(1,
+            schema.RootElement.GetProperty("properties").GetProperty("schema_version").GetProperty("const").GetInt32());
+
+        var releaseWorkflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
+        Assert.Matches(
+            @"(?m)Copy-Item\s+-LiteralPath\s+schema\s+-Destination\s+.+\s+-Recurse\s*$",
+            releaseWorkflow);
+    }
+
+    [Fact]
+    public void ExternalEvidenceImportShapeMatchesPublishedSchema()
+    {
+        var document = new PentestImportDocument(
+            PentestImportDocument.CurrentSchemaVersion,
+            "test",
+            DateTimeOffset.UnixEpoch,
+            new("fixture.xml", 123, new string('a', 64)),
+            "nmap_xml",
+            "7.98",
+            true,
+            [
+                new(
+                    "192.0.2.10",
+                    "fixture.example",
+                    "tcp",
+                    443,
+                    "open",
+                    "syn-ack",
+                    new(
+                        "https",
+                        "fixture",
+                        "1.0",
+                        "test service",
+                        ["cpe:/a:fixture:service:1.0"],
+                        ImportedEvidenceStrength.Strong,
+                        "nmap_service_probe")),
+            ],
+            [
+                new(
+                    "nmap_nse",
+                    "fixture-check",
+                    "Imported Nmap NSE observation: fixture-check",
+                    "unknown",
+                    "192.0.2.10",
+                    443,
+                    "tcp",
+                    ImportedClaimStatus.ImportedMatch,
+                    ImportedEvidenceStrength.Unresolved,
+                    [],
+                    [],
+                    new string('b', 64),
+                    "fixture-check",
+                    "External observation"),
+            ],
+            [new("fixture_diagnostic", "Fixture diagnostic.")]);
+
+        AssertSerializedShape(
+            JsonOutput.Serialize(document),
+            "portcve.import.v1.schema.json");
+    }
+
+    [Fact]
+    public void PrivateAndRedactedRemoteReportShapesMatchPublishedSchema()
+    {
+        var report = RemoteReportFixture();
+
+        AssertSerializedShape(
+            JsonOutput.Serialize(report),
+            "portcve.remote.v1.schema.json");
+        AssertSerializedShape(
+            JsonOutput.Serialize(RemoteAuditRedactor.Redact(report)),
+            "portcve.remote.v1.schema.json");
+    }
+
     private static void AssertSerializedShape(string json, string schemaFile)
     {
         using var instance = JsonDocument.Parse(json);
@@ -68,9 +189,24 @@ public sealed class SchemaContractTests
         schema = ResolveReference(schema, schemaRoot);
         if (instance.ValueKind == JsonValueKind.Object)
         {
-            Assert.True(
-                schema.TryGetProperty("properties", out var properties),
-                $"{schemaFile}: schema node for {path} has no properties object.");
+            if (!schema.TryGetProperty("properties", out var properties))
+            {
+                Assert.True(
+                    schema.TryGetProperty("additionalProperties", out var additionalProperties)
+                    && additionalProperties.ValueKind == JsonValueKind.Object,
+                    $"{schemaFile}: schema node for {path} has neither properties nor an additionalProperties schema.");
+                foreach (var property in instance.EnumerateObject())
+                {
+                    AssertShape(
+                        property.Value,
+                        additionalProperties,
+                        schemaRoot,
+                        $"{path}.{property.Name}",
+                        schemaFile);
+                }
+
+                return;
+            }
 
             if (schema.TryGetProperty("required", out var required))
             {
@@ -280,5 +416,120 @@ public sealed class SchemaContractTests
             ],
             new(1, 1, 0, 1, 0, 1, false),
             [diagnostic]);
+    }
+
+    private static RemoteAuditReport RemoteReportFixture()
+    {
+        var fingerprint = new RemoteFingerprint(
+            RemoteFingerprintKind.Ssh,
+            "ssh",
+            RemoteFingerprintConfidence.ProtocolConfirmed,
+            "passive-greeting",
+            "SSH-2.0-OpenSSH_9.6p1",
+            RemoteFingerprint.ReadOnlyAttributes(new Dictionary<string, string>
+            {
+                ["protocolVersion"] = "2.0",
+            }));
+        var product = new RemoteProductCandidate(
+            "OpenSSH",
+            "9.6p1",
+            RemoteProductConfidence.BannerPattern,
+            "passive-greeting",
+            "OpenSSH_9.6p1");
+        var host = new RemoteHostReport(
+            "fixture.example",
+            ["192.0.2.10"],
+            [new("192.0.2.10", "ipv4", 22, RemotePortState.Open, 1, [fingerprint], [product], [])],
+            []);
+        var cpe = "cpe:2.3:a:openbsd:openssh:9.6:p1:*:*:*:*:*:*";
+        var applicability = new RemoteAdvisoryApplicability(
+            RemoteAdvisoryApplicabilityDisposition.DirectCandidate,
+            true,
+            false,
+            [
+                new(
+                    "OR",
+                    false,
+                    [
+                        new(
+                            "OR",
+                            false,
+                            [new(
+                                true,
+                                cpe,
+                                "00000000-0000-0000-0000-000000000001",
+                                null,
+                                null,
+                                null,
+                                null,
+                                RemoteAdvisoryCpeAlignment.Proven,
+                                true,
+                                false)]),
+                    ]),
+            ],
+            []);
+        var match = new RemoteAdvisoryMatch(
+            "CVE-2026-0001",
+            "candidate",
+            "remote_banner_match",
+            "OpenSSH",
+            "9.6p1",
+            cpe,
+            "OpenSSH_9.6p1",
+            RemoteAdvisoryConfidence.Strong,
+            "Analyzed",
+            DateTimeOffset.UnixEpoch,
+            applicability,
+            RemoteAdvisorySeverity.High,
+            "nvd@nist.gov/CVSS:3.1",
+            "Fixture candidate advisory.",
+            ["https://example.invalid/CVE-2026-0001"],
+            false,
+            "not_assessed");
+        var assessment = new RemoteAdvisoryAssessment(
+            "remote-product-0001",
+            "fixture.example",
+            "192.0.2.10",
+            22,
+            "OpenSSH",
+            "9.6p1",
+            RemoteProductConfidence.BannerPattern,
+            "OpenSSH_9.6p1",
+            RemoteIdentityDisposition.Resolved,
+            cpe,
+            "NVD Official CPE Dictionary (CPE API 2.0)",
+            "remote-advisory-result-0001",
+            []);
+        var providerResult = new RemoteAdvisoryProviderResult(
+            "remote-advisory-result-0001",
+            "OpenSSH",
+            "9.6p1",
+            cpe,
+            "NVD Official CPE Dictionary (CPE API 2.0)",
+            RemoteAdvisoryStatus.Complete,
+            RemoteAdvisoryResult.ProviderName,
+            RemoteAdvisoryResult.ExplicitOnlineNetworkMode,
+            DateTimeOffset.UnixEpoch,
+            [match],
+            []);
+        return new(
+            1,
+            "test",
+            DateTimeOffset.UnixEpoch,
+            "fixture.example",
+            "tcp",
+            "discovery",
+            true,
+            true,
+            RemoteAdvisoryStatus.Complete,
+            RemoteAuditService.MaximumUniqueAdvisoryIdentities,
+            [22],
+            [host],
+            [assessment],
+            [providerResult],
+            new(1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, true),
+            [],
+            RemoteAuditService.ClaimBoundary,
+            RemoteAuditService.NvdNotice);
     }
 }

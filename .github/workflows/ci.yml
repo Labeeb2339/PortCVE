@@ -10,8 +10,13 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    name: windows-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
@@ -50,15 +55,23 @@ jobs:
           $json = ./artifacts/win-x64/portcve.exe snapshot --no-firewall 2>$null | ConvertFrom-Json
           if ($json.schema_version -ne 1) { throw 'Unexpected snapshot schema.' }
 
+      - name: Verify authorized remote loopback workflow
+        shell: powershell
+        run: ./scripts/Test-RemoteHostIntegration.ps1 -SkipBuild -PortCVEPath ./artifacts/win-x64/portcve.exe
+
+      - name: Verify daily-workflow performance budgets
+        shell: powershell
+        run: ./scripts/Test-Performance.ps1 -PortCVEPath ./artifacts/win-x64/portcve.exe -LocalIterations 5 -RemotePortCount 256 -EnforceBudgets
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          name: test-results
+          name: test-results-${{ matrix.os }}
           path: TestResults/
 
       - name: Upload smoke artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          name: portcve-win-x64
+          name: portcve-win-x64-${{ matrix.os }}
           path: artifacts/win-x64/portcve.exe

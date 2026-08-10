@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/Labeeb2339/PortCVE/security/policy
+    about: Do not disclose exploitable vulnerabilities, secrets, or sensitive target evidence in a public issue.

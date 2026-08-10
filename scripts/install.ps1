@@ -2,7 +2,7 @@
 
 <#
 .SYNOPSIS
-Installs a signed PortCVE release for the current Windows user.
+Installs, updates, or uninstalls PortCVE for the current Windows user.
 
 .DESCRIPTION
 Downloads a versioned ZIP and SHA256SUMS.txt from the official
@@ -10,12 +10,16 @@ Labeeb2339/PortCVE GitHub release, verifies the ZIP checksum, then requires a
 trusted Authenticode signature, the release-bound signer subject, the Code
 Signing EKU, and a trusted timestamp before installing portcve.exe.
 
+With -Uninstall, the same signed script removes only a receipt-bound PortCVE
+installation and its exact user PATH entry without making a network request.
+
 This script has no unsigned, local-asset, or signature-bypass mode.
 #>
 [CmdletBinding()]
 param(
     [string]$Version,
-    [string]$InstallDirectory
+    [string]$InstallDirectory,
+    [switch]$Uninstall
 )
 
 Set-StrictMode -Version Latest
@@ -28,6 +32,7 @@ $script:ReleaseTagPattern = '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0
 $script:InstallerUserAgent = 'PortCVE-Installer/1.0'
 $script:ApiLimitBytes = 2MB
 $script:ChecksumLimitBytes = 128KB
+$script:ReceiptLimitBytes = 64KB
 $script:ZipLimitBytes = 256MB
 $script:ExecutableLimitBytes = 256MB
 $script:MaximumArchiveEntries = 256
@@ -328,17 +333,67 @@ function Get-CanonicalPath {
 function Assert-SafeInstallTarget {
     param([Parameter(Mandatory = $true)][string]$Path)
 
+    foreach ($rawComponent in ($Path -split '[\\/]')) {
+        if ([string]::IsNullOrEmpty($rawComponent) -or $rawComponent -eq '.' -or $rawComponent -eq '..' -or
+            $rawComponent -match '^[A-Za-z]:$') {
+            continue
+        }
+        if ($rawComponent.EndsWith('.', [StringComparison]::Ordinal) -or
+            $rawComponent.EndsWith(' ', [StringComparison]::Ordinal)) {
+            throw "Install directory '$Path' contains a component ending in a dot or space."
+        }
+    }
+
     $full = Get-CanonicalPath $Path
-    $root = [IO.Path]::GetPathRoot($full).TrimEnd('\', '/')
+    $pathRoot = [IO.Path]::GetPathRoot($full)
+    if ([string]::IsNullOrWhiteSpace($pathRoot) -or $pathRoot -notmatch '^[A-Za-z]:[\\/]$') {
+        throw "Install directory '$full' must be on a local Windows drive."
+    }
+    $drive = [IO.DriveInfo]::new($pathRoot)
+    if ($drive.DriveType -ne [IO.DriveType]::Fixed) {
+        throw "Install directory '$full' must be on a fixed local Windows drive."
+    }
+    $root = $pathRoot.TrimEnd('\', '/')
     if ([string]::IsNullOrWhiteSpace($full) -or $full.TrimEnd('\', '/') -eq $root -or $full.Length -gt 220 `
-        -or $full.Contains(';') -or $full.Contains('"')) {
+        -or $full.Contains(';') -or $full.Contains('"') -or $full.Contains('%')) {
         throw "Install directory '$full' is unsafe or too long."
     }
+    $relativePath = $full.Substring($pathRoot.Length)
+    foreach ($component in ($relativePath -split '[\\/]')) {
+        if ([string]::IsNullOrWhiteSpace($component) -or
+            $component.EndsWith('.', [StringComparison]::Ordinal) -or
+            $component.EndsWith(' ', [StringComparison]::Ordinal) -or
+            $component.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+            throw "Install directory '$full' contains an unsafe path component."
+        }
+        $deviceStem = ($component -split '\.', 2)[0].TrimEnd(' ')
+        if ($deviceStem -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$') {
+            throw "Install directory '$full' contains a reserved Windows device name."
+        }
+    }
+
+    $cursor = $full
+    while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+        if (Test-Path -LiteralPath $cursor) {
+            $cursorItem = Get-Item -LiteralPath $cursor -Force
+            if (($cursorItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Install directory '$full' must not traverse reparse point '$cursor'."
+            }
+            if (-not $cursorItem.PSIsContainer -and -not [string]::Equals($cursor, $full, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Install directory '$full' has a non-directory ancestor '$cursor'."
+            }
+        }
+        if ([string]::Equals($cursor.TrimEnd('\', '/'), $root, [StringComparison]::OrdinalIgnoreCase)) { break }
+        $parent = [IO.Directory]::GetParent($cursor)
+        if ($null -eq $parent -or [string]::Equals($parent.FullName, $cursor, [StringComparison]::OrdinalIgnoreCase)) { break }
+        $cursor = $parent.FullName
+    }
+
     if (Test-Path -LiteralPath $full -PathType Leaf) { throw "Install target '$full' is a file." }
     if (Test-Path -LiteralPath $full -PathType Container) {
         $item = Get-Item -LiteralPath $full -Force
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Install target must not be a reparse point.' }
-        $allowed = @('portcve.exe', 'install-receipt.json')
+        $allowed = @('portcve.exe', 'install.ps1', 'install-receipt.json')
         foreach ($child in Get-ChildItem -LiteralPath $full -Force) {
             if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $child.PSIsContainer -or $allowed -cnotcontains $child.Name) {
                 throw "Install target contains unmanaged entry '$($child.Name)'; refusing to replace or delete it."
@@ -366,6 +421,161 @@ function Get-UpdatedUserPath {
     return $updated
 }
 
+function Get-UserPathWithoutInstall {
+    param(
+        [AllowNull()][string]$CurrentPath,
+        [Parameter(Mandatory = $true)][string]$InstallPath
+    )
+
+    if ($null -eq $CurrentPath) { return '' }
+    $canonicalInstall = Get-CanonicalPath $InstallPath
+    $segments = [regex]::Split($CurrentPath, ';')
+    $kept = New-Object 'Collections.Generic.List[string]'
+    $removed = $false
+    foreach ($entry in $segments) {
+        $candidate = $entry.Trim().Trim('"')
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+            try {
+                $candidate = Get-CanonicalPath ([Environment]::ExpandEnvironmentVariables($candidate))
+                if ([string]::Equals($candidate, $canonicalInstall, [StringComparison]::OrdinalIgnoreCase)) {
+                    $removed = $true
+                    continue
+                }
+            }
+            catch {
+                # Preserve unrelated malformed or unresolvable PATH entries verbatim.
+            }
+        }
+        $kept.Add($entry)
+    }
+    if (-not $removed) { return $CurrentPath }
+    return $kept -join ';'
+}
+
+function Read-PortCVEInstallReceipt {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallPath
+    )
+
+    $receiptPath = Join-Path $InstallPath 'install-receipt.json'
+    if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
+        throw "Install target '$InstallPath' has no PortCVE installation receipt."
+    }
+
+    try {
+        $receipt = Read-BoundedUtf8File -Path $receiptPath -MaximumBytes $script:ReceiptLimitBytes | ConvertFrom-Json
+    }
+    catch {
+        throw "Install target '$InstallPath' has an invalid PortCVE installation receipt: $($_.Exception.Message)"
+    }
+
+    $expectedProperties = @(
+        'schema_version',
+        'product',
+        'version',
+        'repository',
+        'install_path',
+        'zip_asset',
+        'zip_sha256',
+        'executable_sha256',
+        'installer_sha256',
+        'signer_subject',
+        'timestamp_subject',
+        'installed_at_utc'
+    )
+    $actualProperties = @($receipt.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($actualProperties.Count -ne $expectedProperties.Count) {
+        throw "Install target '$InstallPath' has an unexpected receipt shape."
+    }
+    foreach ($expectedProperty in $expectedProperties) {
+        if (@($actualProperties | Where-Object { [string]::Equals($_, $expectedProperty, [StringComparison]::Ordinal) }).Count -ne 1) {
+            throw "Install target '$InstallPath' is missing exact receipt field '$expectedProperty'."
+        }
+    }
+
+    if ([int]$receipt.schema_version -ne 1 -or
+        -not [string]::Equals([string]$receipt.product, 'PortCVE', [StringComparison]::Ordinal) -or
+        -not [string]::Equals([string]$receipt.repository, $script:Repository, [StringComparison]::Ordinal)) {
+        throw "Install target '$InstallPath' is not a receipt-bound PortCVE installation."
+    }
+    $receiptVersion = [string]$receipt.version
+    if (-not [regex]::IsMatch($receiptVersion, $script:ReleaseTagPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant) -or
+        -not [string]::Equals([string]$receipt.zip_asset, "portcve-$receiptVersion-win-x64.zip", [StringComparison]::Ordinal)) {
+        throw "Install target '$InstallPath' has inconsistent release identity in its receipt."
+    }
+    if (-not [string]::Equals((Get-CanonicalPath ([string]$receipt.install_path)), (Get-CanonicalPath $InstallPath), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Install target '$InstallPath' does not match the path recorded in its receipt."
+    }
+    if ([string]$receipt.zip_sha256 -notmatch '^[0-9a-f]{64}$' -or
+        [string]$receipt.executable_sha256 -notmatch '^[0-9a-f]{64}$' -or
+        [string]$receipt.installer_sha256 -notmatch '^[0-9a-f]{64}$' -or
+        [string]::IsNullOrWhiteSpace([string]$receipt.signer_subject) -or
+        [string]::IsNullOrWhiteSpace([string]$receipt.timestamp_subject)) {
+        throw "Install target '$InstallPath' has invalid integrity or signer metadata in its receipt."
+    }
+    $installedAt = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse(
+            [string]$receipt.installed_at_utc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind,
+            [ref]$installedAt) -or $installedAt.Offset -ne [TimeSpan]::Zero) {
+        throw "Install target '$InstallPath' has an invalid UTC installation time in its receipt."
+    }
+    return $receipt
+}
+
+function Assert-ManagedInstallation {
+    param([Parameter(Mandatory = $true)][string]$InstallPath)
+
+    $full = Assert-SafeInstallTarget $InstallPath
+    if (-not (Test-Path -LiteralPath $full -PathType Container)) {
+        throw "PortCVE is not installed at '$full'."
+    }
+    $children = @(Get-ChildItem -LiteralPath $full -Force)
+    $expectedNames = @('install-receipt.json', 'install.ps1', 'portcve.exe')
+    if ($children.Count -ne $expectedNames.Count) {
+        throw "Install target '$full' is not an exact managed PortCVE installation."
+    }
+    foreach ($expectedName in $expectedNames) {
+        if (@($children | Where-Object { -not $_.PSIsContainer -and [string]::Equals($_.Name, $expectedName, [StringComparison]::Ordinal) }).Count -ne 1) {
+            throw "Install target '$full' is missing managed file '$expectedName'."
+        }
+    }
+    if ((Get-Item -LiteralPath (Join-Path $full 'portcve.exe')).Length -le 0) {
+        throw "Install target '$full' contains an empty portcve.exe."
+    }
+    if ((Get-Item -LiteralPath (Join-Path $full 'install.ps1')).Length -le 0) {
+        throw "Install target '$full' contains an empty install.ps1."
+    }
+    $receipt = Read-PortCVEInstallReceipt -InstallPath $full
+    $actualExecutableHash = Get-Sha256 (Join-Path $full 'portcve.exe')
+    $actualInstallerHash = Get-Sha256 (Join-Path $full 'install.ps1')
+    if (-not [string]::Equals($actualExecutableHash, [string]$receipt.executable_sha256, [StringComparison]::Ordinal) -or
+        -not [string]::Equals($actualInstallerHash, [string]$receipt.installer_sha256, [StringComparison]::Ordinal)) {
+        throw "Install target '$full' no longer matches the executable and installer hashes in its receipt."
+    }
+    $executableSignature = Assert-TrustedReleaseExecutable (Join-Path $full 'portcve.exe')
+    $null = Assert-TrustedInstallerFile (Join-Path $full 'install.ps1')
+    if (-not [string]::Equals([string]$receipt.signer_subject, $executableSignature.SignerCertificate.Subject, [StringComparison]::Ordinal) -or
+        -not [string]::Equals([string]$receipt.timestamp_subject, $executableSignature.TimeStamperCertificate.Subject, [StringComparison]::Ordinal)) {
+        throw "Install target '$full' no longer matches the signer and timestamp identities in its receipt."
+    }
+    return $full
+}
+
+function Assert-InstallTargetReadyForCommit {
+    param([Parameter(Mandatory = $true)][string]$InstallPath)
+
+    $full = Assert-SafeInstallTarget $InstallPath
+    if (Test-Path -LiteralPath $full -PathType Container) {
+        $children = @(Get-ChildItem -LiteralPath $full -Force)
+        if ($children.Count -gt 0) {
+            return Assert-ManagedInstallation $full
+        }
+    }
+    return $full
+}
+
 function Assert-ManagedDirectory {
     param(
         [Parameter(Mandatory = $true)][string]$Candidate,
@@ -390,7 +600,13 @@ function Remove-ManagedDirectory {
     )
 
     $full = Assert-ManagedDirectory -Candidate $Candidate -ExpectedParent $ExpectedParent -ExpectedLeaf $ExpectedLeaf
-    if (Test-Path -LiteralPath $full) { Remove-Item -LiteralPath $full -Recurse -Force }
+    if (Test-Path -LiteralPath $full) {
+        $item = Get-Item -LiteralPath $full -Force
+        if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing cleanup of non-directory or reparse-point path '$full'."
+        }
+        Remove-Item -LiteralPath $full -Recurse -Force
+    }
 }
 
 function Invoke-AtomicInstall {
@@ -419,7 +635,6 @@ function Invoke-AtomicInstall {
             [Environment]::SetEnvironmentVariable('Path', $UpdatedUserPath, [EnvironmentVariableTarget]::User)
             $pathChanged = $true
         }
-        if ($hadExisting) { Remove-ManagedDirectory -Candidate $backup -ExpectedParent $parent -ExpectedLeaf $backupLeaf }
     }
     catch {
         $failure = $_
@@ -445,12 +660,111 @@ function Invoke-AtomicInstall {
         }
         throw $failure
     }
+
+    if ($hadExisting) {
+        try {
+            Remove-ManagedDirectory -Candidate $backup -ExpectedParent $parent -ExpectedLeaf $backupLeaf
+        }
+        catch {
+            throw "PortCVE was updated, but the previous-version backup could not be removed from '$backup': $($_.Exception.Message)"
+        }
+    }
+}
+
+function Invoke-AtomicUninstall {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallPath,
+        [Parameter(Mandatory = $true)][string]$Token,
+        [Parameter(Mandatory = $true)][string]$OriginalUserPath,
+        [Parameter(Mandatory = $true)][string]$UpdatedUserPath
+    )
+
+    $parent = Split-Path -Parent $InstallPath
+    $leaf = Split-Path -Leaf $InstallPath
+    $quarantineLeaf = "$leaf.uninstall-$Token"
+    $quarantine = Join-Path $parent $quarantineLeaf
+    if (Test-Path -LiteralPath $quarantine) {
+        throw "Uninstall quarantine path '$quarantine' already exists."
+    }
+
+    $moved = $false
+    $pathChanged = $false
+    try {
+        [IO.Directory]::Move($InstallPath, $quarantine)
+        $moved = $true
+        if (-not [string]::Equals($OriginalUserPath, $UpdatedUserPath, [StringComparison]::Ordinal)) {
+            [Environment]::SetEnvironmentVariable('Path', $UpdatedUserPath, [EnvironmentVariableTarget]::User)
+            $pathChanged = $true
+        }
+    }
+    catch {
+        $failure = $_
+        $rollbackErrors = New-Object 'Collections.Generic.List[string]'
+        if ($pathChanged) {
+            try { [Environment]::SetEnvironmentVariable('Path', $OriginalUserPath, [EnvironmentVariableTarget]::User) }
+            catch { $rollbackErrors.Add("PATH rollback failed: $($_.Exception.Message)") }
+        }
+        if ($moved -and (Test-Path -LiteralPath $quarantine -PathType Container) -and -not (Test-Path -LiteralPath $InstallPath)) {
+            try { [IO.Directory]::Move($quarantine, $InstallPath) }
+            catch { $rollbackErrors.Add("installation restore failed: $($_.Exception.Message)") }
+        }
+        if ($rollbackErrors.Count -gt 0) {
+            throw "Uninstallation failed: $($failure.Exception.Message). Rollback was incomplete: $($rollbackErrors -join '; ')"
+        }
+        throw $failure
+    }
+
+    try {
+        Remove-ManagedDirectory -Candidate $quarantine -ExpectedParent $parent -ExpectedLeaf $quarantineLeaf
+    }
+    catch {
+        throw "PortCVE was removed from the user PATH, but quarantined files could not be deleted from '$quarantine': $($_.Exception.Message)"
+    }
+}
+
+function Invoke-PortCVEUninstall {
+    param([Parameter(Mandatory = $true)][string]$InstallPath)
+
+    $installPath = Assert-SafeInstallTarget $InstallPath
+    $currentLocation = Get-Location
+    if ($null -ne $currentLocation.Provider -and
+        [string]::Equals($currentLocation.Provider.Name, 'FileSystem', [StringComparison]::OrdinalIgnoreCase)) {
+        $currentPath = Get-CanonicalPath $currentLocation.ProviderPath
+        $installPrefix = $installPath + [IO.Path]::DirectorySeparatorChar
+        if ([string]::Equals($currentPath, $installPath, [StringComparison]::OrdinalIgnoreCase) -or
+            $currentPath.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Change to a directory outside '$installPath' before uninstalling PortCVE."
+        }
+    }
+    $originalUserPath = [Environment]::GetEnvironmentVariable('Path', [EnvironmentVariableTarget]::User)
+    if ($null -eq $originalUserPath) { $originalUserPath = '' }
+    $updatedUserPath = Get-UserPathWithoutInstall -CurrentPath $originalUserPath -InstallPath $installPath
+
+    if (-not (Test-Path -LiteralPath $installPath -PathType Container)) {
+        if (-not [string]::Equals($originalUserPath, $updatedUserPath, [StringComparison]::Ordinal)) {
+            [Environment]::SetEnvironmentVariable('Path', $updatedUserPath, [EnvironmentVariableTarget]::User)
+        }
+        Write-Host "PortCVE is not installed at '$installPath'; any exact stale user PATH entry was removed."
+        return
+    }
+
+    $installPath = Assert-ManagedInstallation $installPath
+    $token = [Guid]::NewGuid().ToString('N')
+    Invoke-AtomicUninstall `
+        -InstallPath $installPath `
+        -Token $token `
+        -OriginalUserPath $originalUserPath `
+        -UpdatedUserPath $updatedUserPath
+
+    Write-Host "PortCVE was uninstalled from '$installPath'."
+    Write-Host 'Open a new terminal to use the updated user PATH.'
 }
 
 function Invoke-PortCVEInstall {
     param(
         [string]$Version,
         [string]$InstallDirectory,
+        [switch]$Uninstall,
         [AllowNull()][string]$InstallerPath
     )
 
@@ -461,9 +775,14 @@ function Invoke-PortCVEInstall {
         throw 'PortCVE installation must run from the signed install.ps1 file; piped or in-memory execution is refused.'
     }
     $null = Assert-TrustedInstallerFile -Path $InstallerPath
+    $resolvedInstallerPath = (Resolve-Path -LiteralPath $InstallerPath -ErrorAction Stop).Path
 
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitOperatingSystem) {
         throw 'PortCVE installer supports 64-bit Windows only.'
+    }
+
+    if ($Uninstall -and -not [string]::IsNullOrWhiteSpace($Version)) {
+        throw '-Version cannot be combined with -Uninstall.'
     }
 
     if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
@@ -472,6 +791,11 @@ function Invoke-PortCVEInstall {
         $InstallDirectory = Join-Path $localAppData 'Programs\PortCVE'
     }
     $installPath = Assert-SafeInstallTarget $InstallDirectory
+    if ($Uninstall) {
+        Invoke-PortCVEUninstall -InstallPath $installPath
+        return
+    }
+    $installPath = Assert-InstallTargetReadyForCommit $installPath
     $installParent = Split-Path -Parent $installPath
     [IO.Directory]::CreateDirectory($installParent) | Out-Null
 
@@ -506,12 +830,18 @@ function Invoke-PortCVEInstall {
         [IO.Directory]::CreateDirectory($staging) | Out-Null
         [IO.File]::Copy($executable, (Join-Path $staging 'portcve.exe'), $false)
         $null = Assert-TrustedReleaseExecutable (Join-Path $staging 'portcve.exe')
+        [IO.File]::Copy($resolvedInstallerPath, (Join-Path $staging 'install.ps1'), $false)
+        $null = Assert-TrustedInstallerFile (Join-Path $staging 'install.ps1')
         $receipt = [ordered]@{
+            schema_version = 1
             product = 'PortCVE'
             version = $release.Tag
             repository = $script:Repository
+            install_path = $installPath
             zip_asset = $release.ZipName
             zip_sha256 = $actualHash
+            executable_sha256 = Get-Sha256 (Join-Path $staging 'portcve.exe')
+            installer_sha256 = Get-Sha256 (Join-Path $staging 'install.ps1')
             signer_subject = $signature.SignerCertificate.Subject
             timestamp_subject = $signature.TimeStamperCertificate.Subject
             installed_at_utc = [DateTime]::UtcNow.ToString('o')
@@ -521,6 +851,7 @@ function Invoke-PortCVEInstall {
         $originalUserPath = [Environment]::GetEnvironmentVariable('Path', [EnvironmentVariableTarget]::User)
         if ($null -eq $originalUserPath) { $originalUserPath = '' }
         $updatedUserPath = Get-UpdatedUserPath -CurrentPath $originalUserPath -InstallPath $installPath
+        $installPath = Assert-InstallTargetReadyForCommit $installPath
         Invoke-AtomicInstall -InstallPath $installPath -StagingPath $staging -Token $token -OriginalUserPath $originalUserPath -UpdatedUserPath $updatedUserPath
 
         Write-Host "PortCVE $($release.Tag) installed to '$installPath'."

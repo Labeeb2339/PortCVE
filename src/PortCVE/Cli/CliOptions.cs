@@ -1,4 +1,5 @@
 using PortCVE.Domain;
+using PortCVE.Remote.Imports;
 using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Cli;
@@ -8,6 +9,10 @@ public enum CommandKind
     List,
     Inspect,
     Scan,
+    ScanHost,
+    Import,
+    DbStatus,
+    DbUpdate,
     Lock,
     Snapshot,
     Diff,
@@ -39,7 +44,18 @@ public sealed record CliOptions(
     int? Iterations = null,
     bool All = false,
     string? SbomPath = null,
-    VulnerabilitySeverity? FailOn = null);
+    VulnerabilitySeverity? FailOn = null,
+    string? RemoteTarget = null,
+    string? RemotePorts = null,
+    bool Active = false,
+    bool Authorized = false,
+    bool OnlineAdvisories = false,
+    int? Concurrency = null,
+    int? Rate = null,
+    TimeSpan? ConnectTimeout = null,
+    TimeSpan? ReadTimeout = null,
+    int? MaximumHosts = null,
+    RemoteImportFormat? ImportFormat = null);
 
 public sealed class CliUsageException(string message) : Exception(message);
 

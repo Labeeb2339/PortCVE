@@ -1,5 +1,6 @@
 using PortCVE.Cli;
 using PortCVE.Domain;
+using PortCVE.Remote.Imports;
 using PortCVE.Vulnerabilities;
 
 namespace PortCVE.Tests;
@@ -112,6 +113,143 @@ public sealed class CliParserTests
 
         Assert.True(result.All);
         Assert.Equal(TransportProtocol.Tcp, result.Protocol);
+    }
+
+    [Theory]
+    [InlineData("status", CommandKind.DbStatus, false)]
+    [InlineData("update", CommandKind.DbUpdate, true)]
+    public void Parse_TrivyDatabaseCommands_AreExplicitAndBounded(
+        string action,
+        CommandKind expectedCommand,
+        bool json)
+    {
+        var arguments = json
+            ? new[] { "db", action, "--json" }
+            : new[] { "db", action };
+
+        var result = CliParser.Parse(arguments);
+
+        Assert.Equal(expectedCommand, result.Command);
+        Assert.Equal(json, result.Json);
+    }
+
+    [Theory]
+    [InlineData("db")]
+    [InlineData("db", "unknown")]
+    [InlineData("db", "status", "extra")]
+    [InlineData("db", "update", "--strict")]
+    [InlineData("db", "update", "--output", "report.json")]
+    [InlineData("db", "status", "--include-private")]
+    [InlineData("db", "status", "--online-advisories")]
+    public void Parse_InvalidTrivyDatabaseCommands_AreRejected(params string[] arguments)
+    {
+        Assert.Throws<CliUsageException>(() => CliParser.Parse(arguments));
+    }
+
+    [Fact]
+    public void Parse_TrivyDatabaseHelp_UsesGlobalReference()
+    {
+        var result = CliParser.Parse(["db", "--help"]);
+
+        Assert.Equal(CommandKind.Help, result.Command);
+    }
+
+    [Fact]
+    public void Parse_TrivyDatabasePrivateJson_IsExplicitlyWired()
+    {
+        var result = CliParser.Parse(["db", "status", "--json", "--include-private"]);
+
+        Assert.Equal(CommandKind.DbStatus, result.Command);
+        Assert.True(result.Json);
+        Assert.True(result.IncludePrivate);
+    }
+
+    [Fact]
+    public void Parse_ScanHost_PentestOptionsAreWired()
+    {
+        var result = CliParser.Parse(
+        [
+            "scan-host", "192.0.2.0/30", "--ports", "22,80,443,8000-8002", "--active",
+            "--authorized", "--online-advisories", "--concurrency", "64", "--rate", "250", "--connect-timeout", "750ms",
+            "--read-timeout", "2s", "--max-hosts", "16", "--fail-on", "high", "--json",
+        ]);
+
+        Assert.Equal(CommandKind.ScanHost, result.Command);
+        Assert.Equal("192.0.2.0/30", result.RemoteTarget);
+        Assert.Equal("22,80,443,8000-8002", result.RemotePorts);
+        Assert.True(result.Active);
+        Assert.True(result.Authorized);
+        Assert.True(result.OnlineAdvisories);
+        Assert.Equal(64, result.Concurrency);
+        Assert.Equal(250, result.Rate);
+        Assert.Equal(TimeSpan.FromMilliseconds(750), result.ConnectTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(2), result.ReadTimeout);
+        Assert.Equal(16, result.MaximumHosts);
+        Assert.Equal(VulnerabilitySeverity.High, result.FailOn);
+        Assert.True(result.Json);
+    }
+
+    [Fact]
+    public void Parse_ScanHost_AllowsExplicitMaximumEngagementSize()
+    {
+        var result = CliParser.Parse(
+            ["scan-host", "10.20.0.0/16", "--authorized", "--max-hosts", "65536", "--ports", "443"]);
+
+        Assert.Equal(65536, result.MaximumHosts);
+        Assert.Equal("443", result.RemotePorts);
+    }
+
+    [Theory]
+    [InlineData("nmap", RemoteImportFormat.NmapXml)]
+    [InlineData("nmap-xml", RemoteImportFormat.NmapXml)]
+    [InlineData("nuclei", RemoteImportFormat.NucleiJsonl)]
+    [InlineData("nuclei-jsonl", RemoteImportFormat.NucleiJsonl)]
+    public void Parse_ImportFormatPathAndOutputFlags_AreWired(
+        string format,
+        RemoteImportFormat expectedFormat)
+    {
+        var result = CliParser.Parse(
+            ["import", format, "results.fixture", "--output", "normalized.json", "--force", "--strict", "--json"]);
+
+        Assert.Equal(CommandKind.Import, result.Command);
+        Assert.Equal(expectedFormat, result.ImportFormat);
+        Assert.Equal("results.fixture", result.InputPath);
+        Assert.Equal("normalized.json", result.OutputPath);
+        Assert.True(result.Force);
+        Assert.True(result.Strict);
+        Assert.True(result.Json);
+    }
+
+    [Theory]
+    [InlineData("import")]
+    [InlineData("import", "nmap")]
+    [InlineData("import", "unknown", "results.txt")]
+    [InlineData("import", "nmap", "results.xml", "extra")]
+    [InlineData("import", "nmap", "results.xml", "--include-private")]
+    [InlineData("import", "nuclei", "results.jsonl", "--active")]
+    [InlineData("import", "nuclei", "results.jsonl", "--fail-on", "high")]
+    public void Parse_InvalidImportCombinations_AreRejected(params string[] arguments)
+    {
+        Assert.Throws<CliUsageException>(() => CliParser.Parse(arguments));
+    }
+
+    [Theory]
+    [InlineData("scan-host")]
+    [InlineData("scan-host", "example.com", "extra")]
+    [InlineData("scan-host", "example.com")]
+    [InlineData("scan-host", "example.com", "--all")]
+    [InlineData("scan-host", "example.com", "--active")]
+    [InlineData("scan-host", "example.com", "--firewall")]
+    [InlineData("scan-host", "example.com", "--concurrency", "0")]
+    [InlineData("scan-host", "example.com", "--rate", "10001")]
+    [InlineData("scan-host", "example.com", "--authorized", "--max-hosts", "65537")]
+    [InlineData("scan-host", "example.com", "--authorized", "--fail-on", "high")]
+    [InlineData("scan-host", "example.com", "--connect-timeout", "31s")]
+    [InlineData("list", "--ports", "80")]
+    [InlineData("scan", "tcp:443", "--active")]
+    public void Parse_InvalidScanHostCombinations_AreRejected(params string[] arguments)
+    {
+        Assert.Throws<CliUsageException>(() => CliParser.Parse(arguments));
     }
 
     [Theory]

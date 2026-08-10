@@ -4,6 +4,9 @@ using PortCVE.Analysis;
 using PortCVE.Collection;
 using PortCVE.Domain;
 using PortCVE.Output;
+using PortCVE.Remote;
+using PortCVE.Remote.Advisories;
+using PortCVE.Remote.Imports;
 using PortCVE.Snapshots;
 using PortCVE.Vulnerabilities;
 
@@ -15,13 +18,20 @@ public sealed class CliApplication
     private readonly LockfileService lockfileService;
     private readonly IVulnerabilityScanner vulnerabilityScanner;
     private readonly Func<string, LocalPathValidation> sbomPathValidator;
+    private readonly IRemoteHostScanner remoteHostScanner;
+    private readonly IRemoteAdvisoryClient remoteAdvisoryClient;
+    private readonly Func<string?> nvdApiKeyProvider;
+    private readonly ITrivyDatabaseService trivyDatabaseService;
 
     public CliApplication()
         : this(
             new SnapshotBuilder(),
             new LockfileService(),
             new TrivyVulnerabilityScanner(),
-            LocalPathPolicy.ValidateExistingLocalFile)
+            LocalPathPolicy.ValidateExistingLocalFile,
+            new RemoteHostScanner(),
+            CreateNvdClient(),
+            ReadNvdApiKey)
     {
     }
 
@@ -30,7 +40,10 @@ public sealed class CliApplication
             snapshotBuilder,
             lockfileService,
             new TrivyVulnerabilityScanner(),
-            LocalPathPolicy.ValidateExistingLocalFile)
+            LocalPathPolicy.ValidateExistingLocalFile,
+            new RemoteHostScanner(),
+            CreateNvdClient(),
+            ReadNvdApiKey)
     {
     }
 
@@ -42,7 +55,10 @@ public sealed class CliApplication
             snapshotBuilder,
             lockfileService,
             vulnerabilityScanner,
-            LocalPathPolicy.ValidateExistingLocalFile)
+            LocalPathPolicy.ValidateExistingLocalFile,
+            new RemoteHostScanner(),
+            CreateNvdClient(),
+            ReadNvdApiKey)
     {
     }
 
@@ -51,11 +67,68 @@ public sealed class CliApplication
         LockfileService lockfileService,
         IVulnerabilityScanner vulnerabilityScanner,
         Func<string, LocalPathValidation> sbomPathValidator)
+        : this(
+            snapshotBuilder,
+            lockfileService,
+            vulnerabilityScanner,
+            sbomPathValidator,
+            new RemoteHostScanner(),
+            CreateNvdClient(),
+            ReadNvdApiKey)
+    {
+    }
+
+    internal CliApplication(
+        ISnapshotBuilder snapshotBuilder,
+        LockfileService lockfileService,
+        IVulnerabilityScanner vulnerabilityScanner,
+        Func<string, LocalPathValidation> sbomPathValidator,
+        IRemoteHostScanner remoteHostScanner,
+        IRemoteAdvisoryClient remoteAdvisoryClient,
+        Func<string?> nvdApiKeyProvider)
+        : this(
+            snapshotBuilder,
+            lockfileService,
+            vulnerabilityScanner,
+            sbomPathValidator,
+            remoteHostScanner,
+            remoteAdvisoryClient,
+            nvdApiKeyProvider,
+            new TrivyDatabaseService())
+    {
+    }
+
+    internal CliApplication(ITrivyDatabaseService trivyDatabaseService)
+        : this(
+            new SnapshotBuilder(),
+            new LockfileService(),
+            new TrivyVulnerabilityScanner(),
+            LocalPathPolicy.ValidateExistingLocalFile,
+            new RemoteHostScanner(),
+            CreateNvdClient(),
+            ReadNvdApiKey,
+            trivyDatabaseService)
+    {
+    }
+
+    internal CliApplication(
+        ISnapshotBuilder snapshotBuilder,
+        LockfileService lockfileService,
+        IVulnerabilityScanner vulnerabilityScanner,
+        Func<string, LocalPathValidation> sbomPathValidator,
+        IRemoteHostScanner remoteHostScanner,
+        IRemoteAdvisoryClient remoteAdvisoryClient,
+        Func<string?> nvdApiKeyProvider,
+        ITrivyDatabaseService trivyDatabaseService)
     {
         this.snapshotBuilder = snapshotBuilder;
         this.lockfileService = lockfileService;
         this.vulnerabilityScanner = vulnerabilityScanner;
         this.sbomPathValidator = sbomPathValidator;
+        this.remoteHostScanner = remoteHostScanner;
+        this.remoteAdvisoryClient = remoteAdvisoryClient;
+        this.nvdApiKeyProvider = nvdApiKeyProvider;
+        this.trivyDatabaseService = trivyDatabaseService;
     }
 
     public async Task<int> RunAsync(
@@ -70,6 +143,10 @@ public sealed class CliApplication
             CommandKind.Version => WriteVersion(output),
             CommandKind.List or CommandKind.Inspect => await RunListAsync(options, output, error, cancellationToken),
             CommandKind.Scan => await RunScanAsync(options, output, error, cancellationToken),
+            CommandKind.ScanHost => await RunScanHostAsync(options, output, error, cancellationToken),
+            CommandKind.Import => await RunImportAsync(options, output, error, cancellationToken),
+            CommandKind.DbStatus or CommandKind.DbUpdate =>
+                await RunTrivyDatabaseAsync(options, output, error, cancellationToken),
             CommandKind.Lock => await RunLockAsync(options, output, error, cancellationToken),
             CommandKind.Snapshot => await RunSnapshotAsync(options, output, error, cancellationToken),
             CommandKind.Diff or CommandKind.Check => await RunDiffAsync(options, output, error, cancellationToken),
@@ -77,6 +154,63 @@ public sealed class CliApplication
             CommandKind.Doctor => await RunDoctorAsync(options, output, error, cancellationToken),
             _ => throw new CliUsageException("Unsupported command."),
         };
+    }
+
+    private async Task<int> RunTrivyDatabaseAsync(
+        CliOptions options,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        var status = options.Command == CommandKind.DbUpdate
+            ? await trivyDatabaseService.UpdateAsync(cancellationToken)
+            : await trivyDatabaseService.GetStatusAsync(cancellationToken);
+
+        if (options.Json)
+        {
+            var document = TrivyDatabaseDocument.FromStatus(status, Version);
+            if (!options.IncludePrivate)
+            {
+                document = TrivyDatabaseDocumentRedactor.Redact(document);
+            }
+
+            await output.WriteLineAsync(JsonOutput.Serialize(document));
+        }
+        else
+        {
+            output.WriteLine("Trivy vulnerability database");
+            output.WriteLine($"State            {status.State.ToString().ToLowerInvariant()}");
+            output.WriteLine($"Operation        {status.Operation.ToString().ToLowerInvariant()}");
+            output.WriteLine($"Network requested {(status.NetworkRequested ? "yes" : "no")}");
+            output.WriteLine($"Executable       {status.ExecutablePath ?? "unresolved"}");
+            output.WriteLine($"Trivy version    {status.EngineVersion ?? "unavailable"}");
+            output.WriteLine($"Cache            {status.CacheDirectory ?? "invalid"}");
+            output.WriteLine($"Database schema  {status.DatabaseSchemaVersion?.ToString() ?? "unavailable"}");
+            output.WriteLine($"Database updated {status.DatabaseUpdatedAt?.ToString("O") ?? "unavailable"}");
+            output.WriteLine($"Next update      {status.DatabaseNextUpdate?.ToString("O") ?? "unavailable"}");
+            output.WriteLine($"Database age     {FormatDatabaseAge(status.DatabaseAgeSeconds)}");
+            output.WriteLine($"Result           {status.Code}: {status.Message}");
+        }
+
+        if (status.Ready)
+        {
+            return ExitCodes.Success;
+        }
+
+        error.WriteLine($"error: {status.Code}: {status.Message}");
+        return status.State == TrivyDatabaseState.Failed
+            ? ExitCodes.RuntimeFailure
+            : ExitCodes.IncompleteEvidence;
+    }
+
+    private static string FormatDatabaseAge(long? ageSeconds)
+    {
+        if (ageSeconds is null)
+        {
+            return "unavailable";
+        }
+
+        return $"{ageSeconds.Value / 3600d:0.#} hours";
     }
 
     private async Task<int> RunScanAsync(
@@ -157,7 +291,7 @@ public sealed class CliApplication
             return ExitCodes.IncompleteEvidence;
         }
 
-        if (options.Strict && !report.Summary.IsComplete)
+        if ((options.Strict || options.FailOn is not null) && !report.Summary.IsComplete)
         {
             return ExitCodes.IncompleteEvidence;
         }
@@ -166,6 +300,249 @@ public sealed class CliApplication
             MeetsThreshold(finding.Severity, options.FailOn.Value)))
         {
             return ExitCodes.NegativeResult;
+        }
+
+        return ExitCodes.Success;
+    }
+
+    private async Task<int> RunScanHostAsync(
+        CliOptions options,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        if (!options.Authorized)
+        {
+            error.WriteLine(
+                "error: remote assessment requires --authorized to record that the operator has permission to test the target.");
+            return ExitCodes.UsageOrSchema;
+        }
+
+        if (options.FailOn is not null && !options.OnlineAdvisories)
+        {
+            error.WriteLine(
+                "error: remote --fail-on requires --online-advisories; no advisory source was requested.");
+            return ExitCodes.UsageOrSchema;
+        }
+
+        string? validatedOutputPath = null;
+        if (options.OutputPath is not null)
+        {
+            var outputValidation = LocalPathPolicy.ValidateOptionalRemoteOutputFile(options.OutputPath);
+            if (!outputValidation.IsValid)
+            {
+                error.WriteLine($"error: {outputValidation.Code}: {outputValidation.Message}");
+                return ExitCodes.UsageOrSchema;
+            }
+
+            validatedOutputPath = outputValidation.FullPath;
+            if (File.Exists(validatedOutputPath))
+            {
+                error.WriteLine("error: the remote report output already exists; choose a new path.");
+                return ExitCodes.UsageOrSchema;
+            }
+        }
+
+        RemoteTargetPlan targetPlan;
+        IReadOnlyList<int> ports;
+        try
+        {
+            targetPlan = RemoteInputParser.ParseTargets(
+                options.RemoteTarget!,
+                options.MaximumHosts ?? RemoteInputParser.DefaultMaximumHosts);
+            ports = RemoteInputParser.ParsePorts(options.RemotePorts);
+        }
+        catch (RemoteInputException exception)
+        {
+            error.WriteLine($"error: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+
+        var service = new RemoteAuditService(remoteHostScanner, remoteAdvisoryClient);
+        RemoteAuditReport report;
+        try
+        {
+            report = await service.AssessAsync(
+                new(
+                    Version,
+                    targetPlan,
+                    ports,
+                    options.Active ? ProbeDepth.Active : ProbeDepth.Passive,
+                    options.Authorized,
+                    options.OnlineAdvisories,
+                    options.Concurrency ?? 64,
+                    options.Rate ?? 100,
+                    options.ConnectTimeout ?? TimeSpan.FromMilliseconds(1500),
+                    options.ReadTimeout ?? TimeSpan.FromSeconds(5),
+                    options.OnlineAdvisories ? nvdApiKeyProvider() : null),
+                cancellationToken);
+        }
+        catch (ArgumentException exception)
+        {
+            error.WriteLine($"error: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+
+        string? serializedJsonReport = null;
+        if (validatedOutputPath is not null || options.Json)
+        {
+            var jsonReport = options.IncludePrivate ? report : RemoteAuditRedactor.Redact(report);
+            serializedJsonReport = JsonOutput.Serialize(jsonReport);
+        }
+
+        if (validatedOutputPath is not null)
+        {
+            var outputRevalidation = LocalPathPolicy.ValidateOptionalRemoteOutputFile(validatedOutputPath);
+            if (!outputRevalidation.IsValid
+                || !string.Equals(
+                    validatedOutputPath,
+                    outputRevalidation.FullPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error.WriteLine(
+                    $"error: {outputRevalidation.Code}: the remote report output path changed or became unsafe during collection.");
+                return ExitCodes.UsageOrSchema;
+            }
+
+            try
+            {
+                await WriteOutputFileAsync(
+                    outputRevalidation.FullPath!,
+                    serializedJsonReport!,
+                    overwrite: false,
+                    cancellationToken);
+            }
+            catch (IOException exception)
+            {
+                error.WriteLine($"error: could not write remote report: {exception.Message}");
+                return ExitCodes.UsageOrSchema;
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                error.WriteLine($"error: could not write remote report: {exception.Message}");
+                return ExitCodes.RuntimeFailure;
+            }
+        }
+
+        if (options.Json)
+        {
+            await output.WriteLineAsync(serializedJsonReport!);
+        }
+        else
+        {
+            RemoteAuditTextRenderer.Render(report, output, error);
+            if (options.OutputPath is not null)
+            {
+                output.WriteLine($"JSON report: {Path.GetFullPath(options.OutputPath)}");
+            }
+        }
+
+        if (report.Summary.ResolvedTargetCount == 0
+            || report.Summary.EndpointCount == 0
+            || report.AdvisoryProviderFailed)
+        {
+            return ExitCodes.IncompleteEvidence;
+        }
+
+        if ((options.Strict || options.FailOn is not null) && !report.Summary.IsComplete)
+        {
+            return ExitCodes.IncompleteEvidence;
+        }
+
+        if (options.FailOn is not null && report.AdvisoryResults
+            .SelectMany(static item => item.Matches)
+            .Where(static match => string.Equals(match.Classification, "candidate", StringComparison.Ordinal))
+            .Any(match => MeetsRemoteThreshold(match.Severity, options.FailOn.Value)))
+        {
+            return ExitCodes.NegativeResult;
+        }
+
+        return ExitCodes.Success;
+    }
+
+    private async Task<int> RunImportAsync(
+        CliOptions options,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        PentestImportDocument document;
+        try
+        {
+            document = new PentestImportService().Import(
+                options.ImportFormat!.Value,
+                options.InputPath!,
+                Version,
+                options.Strict,
+                cancellationToken);
+        }
+        catch (ImportPathException exception)
+        {
+            error.WriteLine($"error: {exception.Code}: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+        catch (InvalidDataException exception)
+        {
+            error.WriteLine($"error: import evidence is invalid: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+        catch (System.Xml.XmlException exception)
+        {
+            error.WriteLine($"error: import evidence is invalid XML: {exception.Message}");
+            return ExitCodes.UsageOrSchema;
+        }
+        catch (IOException exception)
+        {
+            error.WriteLine($"error: could not read import evidence: {exception.Message}");
+            return ExitCodes.RuntimeFailure;
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            error.WriteLine($"error: could not read import evidence: {exception.Message}");
+            return ExitCodes.RuntimeFailure;
+        }
+
+        var json = JsonOutput.Serialize(document);
+        if (options.OutputPath is not null)
+        {
+            var validation = LocalPathPolicy.ValidateOptionalImportOutputFile(options.OutputPath);
+            if (!validation.IsValid)
+            {
+                error.WriteLine($"error: {validation.Code}: {validation.Message}");
+                return ExitCodes.UsageOrSchema;
+            }
+
+            var inputFullPath = Path.GetFullPath(options.InputPath!);
+            if (string.Equals(inputFullPath, validation.FullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                error.WriteLine("error: import output must not replace the source evidence file.");
+                return ExitCodes.UsageOrSchema;
+            }
+
+            try
+            {
+                await WriteOutputFileAsync(
+                    validation.FullPath!,
+                    json,
+                    options.Force,
+                    cancellationToken);
+            }
+            catch (IOException exception)
+            {
+                error.WriteLine($"error: could not write import report: {exception.Message}");
+                return ExitCodes.UsageOrSchema;
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                error.WriteLine($"error: could not write import report: {exception.Message}");
+                return ExitCodes.RuntimeFailure;
+            }
+        }
+
+        await output.WriteLineAsync(json);
+        if (options.Strict && !document.IsComplete)
+        {
+            return ExitCodes.IncompleteEvidence;
         }
 
         return ExitCodes.Success;
@@ -787,6 +1164,87 @@ public sealed class CliApplication
             _ => false,
         };
 
+    private static bool MeetsRemoteThreshold(
+        RemoteAdvisorySeverity actual,
+        VulnerabilitySeverity threshold) => actual switch
+        {
+            RemoteAdvisorySeverity.Critical => true,
+            RemoteAdvisorySeverity.High => threshold == VulnerabilitySeverity.High,
+            _ => false,
+        };
+
+    private static async Task WriteOutputFileAsync(
+        string path,
+        string contents,
+        bool overwrite,
+        CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath)
+            ?? throw new IOException("The output path has no parent directory.");
+        if (!Directory.Exists(directory))
+        {
+            throw new IOException("The output directory does not exist.");
+        }
+
+        var temporaryPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            await using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+            {
+                await writer.WriteAsync(contents.AsMemory(), cancellationToken);
+                await writer.FlushAsync(cancellationToken);
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (overwrite && File.Exists(fullPath))
+            {
+                File.Replace(temporaryPath, fullPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            }
+            else
+            {
+                File.Move(temporaryPath, fullPath, overwrite: false);
+            }
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private static IRemoteAdvisoryClient CreateNvdClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            AutomaticDecompression = System.Net.DecompressionMethods.All,
+            UseCookies = false,
+        };
+        var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        return new NvdAdvisoryClient(client);
+    }
+
+    private static string? ReadNvdApiKey()
+    {
+        var value = Environment.GetEnvironmentVariable("PORTCVE_NVD_API_KEY");
+        return value is { Length: 0 } ? null : value;
+    }
+
     private static bool IsCheckFailure(ListenerChange change) => change.Kind switch
     {
         ListenerChangeKind.Added => true,
@@ -815,7 +1273,7 @@ public sealed class CliApplication
 
     private static int WriteHelp(TextWriter output)
     {
-        output.WriteLine("PortCVE explains local ports and locks the ones you expect.");
+        output.WriteLine("PortCVE explains local ports and audits authorized remote services with evidence-backed CVE correlation.");
         output.WriteLine();
         output.WriteLine("USAGE");
         output.WriteLine("  portcve                         List local TCP listeners and UDP binds");
@@ -826,6 +1284,11 @@ public sealed class CliApplication
         output.WriteLine("  portcve check listeners.lock    Fail on new, wider, or owner-changed binds");
         output.WriteLine("  portcve scan tcp:8080           Check an exact listener's Docker image offline");
         output.WriteLine("  portcve scan --all              Check exact Docker images for all TCP listeners");
+        output.WriteLine("  portcve db status               Inspect local Trivy and database freshness offline");
+        output.WriteLine("  portcve db update               Explicitly download and validate the Trivy vulnerability database");
+        output.WriteLine("  portcve scan-host <target> --authorized  Discover and fingerprint authorized TCP services");
+        output.WriteLine("  portcve import nmap <scan.xml>  Normalize existing Nmap XML evidence");
+        output.WriteLine("  portcve import nuclei <file>    Normalize existing Nuclei JSONL evidence");
         output.WriteLine("  portcve watch --json             Stream endpoint changes as JSONL");
         output.WriteLine("  portcve doctor                  Check collection coverage and privacy mode");
         output.WriteLine();
@@ -844,8 +1307,14 @@ public sealed class CliApplication
         output.WriteLine("  --strict                            Exit 3 when core evidence is incomplete");
         output.WriteLine("  --all                               Select every TCP listener for scan");
         output.WriteLine("  --sbom <path>                       Scan an explicitly supplied local SBOM");
-        output.WriteLine("  --fail-on <high|critical>           Exit 1 when that severity threshold is met");
-        output.WriteLine("  -o, --output <path>                 Write lock or snapshot output to a file");
+        output.WriteLine("  --fail-on <high|critical>           Gate complete advisory evidence; remote use requires --online-advisories");
+        output.WriteLine("  --ports <common|all|list/ranges>    Select remote TCP ports for scan-host");
+        output.WriteLine("  --authorized                        Assert authorization for the remote target scope");
+        output.WriteLine("  --active                            Add bounded safe HTTP/TLS validation probes");
+        output.WriteLine("  --online-advisories                 Explicitly query NVD for strong catalog-backed identities");
+        output.WriteLine("  --concurrency <1-512> / --rate <n>  Bound remote parallelism and connections per second");
+        output.WriteLine("  --max-hosts <1-65536>               Bound CIDR expansion (default 256)");
+        output.WriteLine("  -o, --output <path>                 Write a lock, snapshot, remote, or import report");
         output.WriteLine("  --force                             Replace an existing output file");
         output.WriteLine("  --interval <duration>               Watch interval, for example 500ms or 2s");
         output.WriteLine();
@@ -853,8 +1322,10 @@ public sealed class CliApplication
         output.WriteLine("  0 success/pass; 1 no match or policy fail; 2 usage/schema;");
         output.WriteLine("  3 incomplete evidence; 4 collection/runtime failure; 130 interrupted.");
         output.WriteLine();
-        output.WriteLine("PortCVE is read-only and does not prove reachability or exploitability.");
+        output.WriteLine("Remote work requires --authorized and never includes exploits, credentials, brute force, or DoS.");
+        output.WriteLine("A successful connection or candidate CVE match does not prove exploitability.");
         output.WriteLine("Vulnerability scans use a preinstalled Trivy database in offline mode; no update is automatic.");
+        output.WriteLine("Only the explicit 'portcve db update' command permits a Trivy database download.");
         return ExitCodes.Success;
     }
 
