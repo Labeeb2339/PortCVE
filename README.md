@@ -26,6 +26,14 @@ The current version is `0.2.0-alpha.1`. Windows x64 is the only supported target
 
 PortCVE is not an exploit framework. It does not brute-force credentials, send exploit payloads, close ports, edit firewall rules, or claim that a CVE match is exploitable.
 
+## What it looks like
+
+`portcve list` maps every local listener to its owner process, scope, and PID:
+
+![Terminal output of portcve list showing listening ports mapped to owner process, scope, and PID](assets/portcve-list.svg)
+
+The screenshot is real output from a Windows x64 build (`HOST POLICY` reports `NOT CHECKED` until a CVE fingerprint rule is supplied).
+
 ## Build from source
 
 Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), then run:
